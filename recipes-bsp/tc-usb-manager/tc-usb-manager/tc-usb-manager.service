@@ -1,0 +1,12 @@
+[Unit]
+Description=telechips usb manager daemon
+Requires=dbus.service
+After=dbus.service
+Before=tc-launcher.service
+
+[Service]
+ExecStart=/usr/bin/umd
+
+[Install]
+WantedBy=multi-user.target
+

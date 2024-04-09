@@ -1,0 +1,8 @@
+[Unit]
+Description=TEE-based HSM Service
+
+[Service]
+ExecStart=/usr/bin/thsmDaemon
+
+[Install]
+WantedBy=multi-user.target

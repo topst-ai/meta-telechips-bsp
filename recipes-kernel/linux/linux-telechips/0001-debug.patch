@@ -1,0 +1,35 @@
+From 0e1f53da14da041dbe8188c67c3ceeca0e07eef7 Mon Sep 17 00:00:00 2001
+From: Myunghwan Kim <mh.kim@telechips.com>
+Date: Wed, 3 Apr 2024 11:42:02 +0900
+Subject: [PATCH] debug
+
+---
+ drivers/of/of_private.h | 2 ++
+ drivers/phy/Makefile    | 3 ++-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/of/of_private.h b/drivers/of/of_private.h
+index 66294d299..d98a15771 100644
+--- a/drivers/of/of_private.h
++++ b/drivers/of/of_private.h
+@@ -172,4 +172,6 @@ static inline int of_dma_get_range(struct device_node *np, u64 *dma_addr,
+ }
+ #endif
+ 
++#define DEBUG
++
+ #endif /* _LINUX_OF_PRIVATE_H */
+diff --git a/drivers/phy/Makefile b/drivers/phy/Makefile
+index c96a1afc9..e153c4277 100644
+--- a/drivers/phy/Makefile
++++ b/drivers/phy/Makefile
+@@ -27,4 +27,5 @@ obj-y					+= broadcom/	\
+ 					   samsung/	\
+ 					   socionext/	\
+ 					   st/		\
+-					   ti/
++					   ti/		\
++					   telechips/
+-- 
+2.34.1
+

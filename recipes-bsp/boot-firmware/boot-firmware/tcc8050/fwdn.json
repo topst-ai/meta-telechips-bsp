@@ -1,0 +1,6 @@
+{
+    "hsm" : "hsm.cs.bin",
+    "fwdn" : "fwdn.rom",
+    "dram" : "dram_params.bin",
+    "mcert" : "mcert.bin"
+}

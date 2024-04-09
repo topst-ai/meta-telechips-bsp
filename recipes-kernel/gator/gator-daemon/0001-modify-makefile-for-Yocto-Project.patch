@@ -1,0 +1,53 @@
+From 974a67163c72b2ff2e85527b464add85d14ecaaa Mon Sep 17 00:00:00 2001
+From: Wily Taekhyun Shin <thshin@telechips.com>
+Date: Wed, 11 Jul 2018 11:11:26 +0900
+Subject: [PATCH] modify makefile for Yocto Project
+
+---
+ daemon/Makefile         | 3 ---
+ daemon/Makefile_aarch64 | 3 ---
+ daemon/common.mk        | 2 +-
+ 3 files changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/daemon/Makefile b/daemon/Makefile
+index dbf6d80..d7c2f83 100644
+--- a/daemon/Makefile
++++ b/daemon/Makefile
+@@ -8,9 +8,6 @@
+ # targets run 'make SOFTFLOAT=1 SYSROOT=/path/to/sysroot', see
+ # streamline/gator/README.md for more details
+ 
+-CC = $(CROSS_COMPILE)gcc
+-CXX = $(CROSS_COMPILE)g++
+-
+ ifeq ($(SOFTFLOAT),1)
+ 	CPPFLAGS += -marm -mthumb-interwork -march=armv4t -mfloat-abi=soft
+ 	LDFLAGS += -marm -march=armv4t -mfloat-abi=soft
+diff --git a/daemon/Makefile_aarch64 b/daemon/Makefile_aarch64
+index 6cf9c21..7598e28 100644
+--- a/daemon/Makefile_aarch64
++++ b/daemon/Makefile_aarch64
+@@ -6,7 +6,4 @@
+ # Uncomment and define CROSS_COMPILE if it is not already defined
+ # CROSS_COMPILE=/path/to/cross-compiler/aarch64-linux-gnu-
+ 
+-CC = $(CROSS_COMPILE)gcc
+-CXX = $(CROSS_COMPILE)g++
+-
+ include common.mk
+diff --git a/daemon/common.mk b/daemon/common.mk
+index dfd912d..88bd3c7 100644
+--- a/daemon/common.mk
++++ b/daemon/common.mk
+@@ -5,7 +5,7 @@
+ # -Werror treats warnings as errors
+ # -std=c++0x is the planned new c++ standard
+ # -std=c++98 is the 1998 c++ standard
+-CPPFLAGS += -O3 -Wall -fno-exceptions -pthread -MD -DETCDIR=\"/etc\" -Ilibsensors -I.
++CPPFLAGS += -O0 -Wall -fno-exceptions -pthread -MD -DETCDIR=\"/etc\" -Ilibsensors -I.
+ CXXFLAGS += -std=c++11 -static-libstdc++ -fno-rtti -Wextra -Wno-shadow -Wpointer-arith -Wundef # -Weffc++ -Wmissing-declarations
+ ifeq ($(WERROR),1)
+ 	CPPFLAGS += -Werror
+-- 
+1.9.3
+

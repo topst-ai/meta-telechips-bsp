@@ -1,0 +1,9 @@
+[Unit]
+Description=ARM DS5 Streamline Daemon Application
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gatord
+
+[Install]
+WantedBy=multi-user.target

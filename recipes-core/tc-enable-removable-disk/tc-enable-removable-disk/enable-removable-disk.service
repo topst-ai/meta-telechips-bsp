@@ -1,0 +1,11 @@
+[Unit]
+Description=This service to enable removable disk after application ready.
+ConditionPathExists=/var/run/MediaPlayer.pid
+After=graphical.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c "/usr/bin/enable-removable-disk.sh start"
+
+[Install]
+WantedBy=graphical.target

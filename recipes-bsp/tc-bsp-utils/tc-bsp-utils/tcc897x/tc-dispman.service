@@ -1,0 +1,13 @@
+[Unit]
+Description=telechips display manager daemon
+Requires=dbus.socket
+After=dbus.socket
+
+[Service]
+Type=forking
+ExecStartPre=/bin/sh -c "ln -sf /dev/i2c-1 /dev/i2c-ddc"
+ExecStartPre=/bin/sh -c "echo 1 > /sys/class/tcc_dispman/tcc_dispman/persist_output_mode"
+ExecStart=/usr/bin/dispman_daemon
+
+[Install]
+WantedBy=multi-user.target

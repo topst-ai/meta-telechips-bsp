@@ -1,0 +1,34 @@
+{
+    ".\\micom-bl1.rom" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x00000000"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x00000000"}
+	],
+    ".\\bl2-2.rom" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x00000100"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x00000100"}
+	],
+    ".\\bconf.bin" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x000001EF"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x000001EF"}
+	],
+    ".\\keypackages.bin" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x000001F0"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x000001F0"}
+	],
+    ".\\dram_params.bin" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x000001F8"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x000001F8"}
+	],
+    ".\\ap.rom" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x00000278"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x00000278"}
+	],
+    ".\\hsm.bin" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x000002E5"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x000002E5"}
+	],
+    ".\\optee.rom" : [
+		{"storage" : "emmc", "area" : "boot0", "addr" : "0x00000366"},
+		{"storage" : "emmc", "area" : "boot1", "addr" : "0x00000366"}
+	]
+}

@@ -1,0 +1,4684 @@
+From b93bae193c59df7eb5610ac8542f8ef7c830ce46 Mon Sep 17 00:00:00 2001
+From: Inbae Jeon <inbest@telechips.com>
+Date: Wed, 6 Dec 2023 14:23:28 +0900
+Subject: [PATCH] [fea] pcie: update pcie controller driver to latest
+
+- This commit updates pcie controller driver to the latest version.
+  - The pcie phy drivers are separate from pcie controller driver.
+  - The pcie endpoint controller mode is supported
+
+TCS: TMRCR-5410
+---
+ .../arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi |   24 +-
+ .../boot/dts/tcc/tcc8050_53-pinctrl.dtsi      |   12 +
+ arch/arm64/boot/dts/tcc/tcc805x.dtsi          |   82 +-
+ drivers/pci/controller/dwc/Kconfig            |   24 +-
+ drivers/pci/controller/dwc/Makefile           |    4 +-
+ drivers/pci/controller/dwc/dolphin/Kconfig    |   41 +
+ drivers/pci/controller/dwc/dolphin/Makefile   |    7 +
+ .../pci/controller/dwc/dolphin/pci-dolphin.c  | 2039 +++++++++++++++++
+ .../pci/controller/dwc/dolphin/pci-dolphin.h  |  155 ++
+ drivers/phy/Kconfig                           |    1 +
+ drivers/phy/telechips/Kconfig                 |   26 +
+ drivers/phy/telechips/Makefile                |    8 +
+ drivers/phy/telechips/phy-sec08lpp-pcie.c     | 1042 +++++++++
+ drivers/phy/telechips/phy-sec14lpp-pcie.c     |  554 +++++
+ drivers/phy/telechips/phy-ss14lpp-pcie.c      |  502 ++++
+ 15 files changed, 4463 insertions(+), 58 deletions(-)
+ create mode 100644 drivers/pci/controller/dwc/dolphin/Kconfig
+ create mode 100644 drivers/pci/controller/dwc/dolphin/Makefile
+ create mode 100644 drivers/pci/controller/dwc/dolphin/pci-dolphin.c
+ create mode 100644 drivers/pci/controller/dwc/dolphin/pci-dolphin.h
+ create mode 100644 drivers/phy/telechips/Kconfig
+ create mode 100644 drivers/phy/telechips/Makefile
+ create mode 100644 drivers/phy/telechips/phy-sec08lpp-pcie.c
+ create mode 100644 drivers/phy/telechips/phy-sec14lpp-pcie.c
+ create mode 100644 drivers/phy/telechips/phy-ss14lpp-pcie.c
+
+diff --git a/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi b/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
+index 72c9ada2edc2..b71a8799c3d6 100755
+--- a/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
++++ b/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
+@@ -33,10 +33,26 @@
+ 		status = "disabled";
+ 	};
+ 
+-    	pcie@11000000 {
+-        	reset-gpio = <&gpa 26 0>;
+-        	status = "okay";
+-    	};
++	pcie_phy@11100000 {
++		status = "okay";
++	};
++
++	pcie@11000000 {
++		pinctrl-names = "default", "idle", "sleep";
++		pinctrl-0 = <&pcie_rst>;
++		pinctrl-1 = <&pcie_rst_idle>;
++		pinctrl-2 = <&pcie_rst_idle>;
++		refclk_type = <0>;
++	};
++
++	pcie_epc@11000000 {
++		pinctrl-names = "default", "idle", "sleep";
++		pinctrl-0 = <&pcie_rst>;
++		pinctrl-1 = <&pcie_rst_idle>;
++		pinctrl-2 = <&pcie_rst_idle>;
++		refclk_type = <0>;
++		status = "okay";
++	};
+ 
+ 	auth-cp {
+ 		compatible = "telechips, tcc-cp";
+diff --git a/arch/arm64/boot/dts/tcc/tcc8050_53-pinctrl.dtsi b/arch/arm64/boot/dts/tcc/tcc8050_53-pinctrl.dtsi
+index af1f9aa585da..f019977dba2b 100755
+--- a/arch/arm64/boot/dts/tcc/tcc8050_53-pinctrl.dtsi
++++ b/arch/arm64/boot/dts/tcc/tcc8050_53-pinctrl.dtsi
+@@ -1081,6 +1081,18 @@
+ 		telechips,input_buffer_enable;
+ 	};
+ 
++	pcie_rst: pcie_rst {
++		telechips,pins = "gpa-26";
++		telechips,pin-function = <0>;
++		telechips,output-high;
++	};
++
++	pcie_rst_idle: pcie_rst_idle {
++		telechips,pins = "gpa-26";
++		telechips,pin-function = <0>;
++		telechips,output-low;
++	};
++
+ 	ts0_idle: ts0_idle {
+ 		telechips,pins = "gpc-0", "gpc-2", "gpc-1", "gpc-3";
+ 		telechips,pin-function = <0>;
+diff --git a/arch/arm64/boot/dts/tcc/tcc805x.dtsi b/arch/arm64/boot/dts/tcc/tcc805x.dtsi
+index 4f7a24a8997d..88218c122755 100755
+--- a/arch/arm64/boot/dts/tcc/tcc805x.dtsi
++++ b/arch/arm64/boot/dts/tcc/tcc805x.dtsi
+@@ -2614,36 +2614,60 @@
+ 		#thermal-sensor-cells = <1>;
+ 	};
+ 
+-
+-    pcie: pcie@11000000 {
+-        compatible = "telechips,pcie", "snps,dw-pcie";
+-        reg = <0 0x11000000 0 0x410000
+-               0 0x11100000 0 0x10000
+-               0 0x11120000 0 0x10000
+-               /* 5 0x00000000 0 0x100000 */
+-               5 0x00700000 0 0x100000
+-               0 0x11110000 0 0x10000>;
+-        reg-names = "dbi", "phy", "cfg", "config" , "clk_cfg";
+-        interrupts = <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
++	pcie_phy: pcie_phy@11100000 {
++		compatible = "synopsys,ln14lpp-pcie-phy";
++		reg = <0 0x11100000 0 0x10000
++			0 0x11110000 0 0x10000>;
++		reg-names = "phy", "clk";
++		#phy-cells = <0>;
+         clocks = <&clk_peri PERI_PCIE0_PHY_CR_CLK>, <&clk_fbus FBUS_PCIe0>;
+-        clock-names = "pcie_phy", "fbus_pci0";
+-        resets = <&pmu_rst RESET_PCIE>;
+-        #address-cells = <3>;
+-        #size-cells = <2>;
+-        device_type = "pci";
+-        ranges = <0x81000000 0 0x00000000 5 0x00600000 0 0x00100000  /* downstream I/O */
+-                  0x82000000 0 0x00000000 5 0x0        0 0x00600000>;   /* non-prefetchable memory*/
+-        #interrupt-cells = <1>;
+-        interrupt-map-mask = <0 0 0 0>;
+-        interrupt-map = <0 0 0 0 &gic GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
+-        num-lanes = <1>;
+-        num-viewport = <4>;
+-        pci_gen = <3>;
+-        using_ext_ref_clk = <0>;
+-        for_si_test = <0>;
+-        ref_clk_pms = <0x0504C80C>;
+-        status = "disabled";
+-    };
++		clock-names = "pcie_phy", "pcie_fbus";
++		pms = <0x0504C80C>;
++		status = "disabled";
++	};
++
++	pcie: pcie@11000000 {
++		compatible = "telechips,tcc805x-pcie";
++		reg = <0 0x11000000 0 0x410000
++			0 0x11120000 0 0x10000
++			5 0x00000000 0 0x100000>;
++		reg-names = "dbi", "link", "config";
++		interrupts = <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
++		resets = <&pmu_rst RESET_PCIE>;
++		bus-range = <0x00 0xff>;
++		#address-cells = <3>;
++		#size-cells = <2>;
++		device_type = "pci";
++		ranges = <0x81000000 0 0x00100000 5 0x00100000 0 0x00100000
++			0x82000000 0 0x10000000 5 0x10000000 0 0x30000000>;
++		#interrupt-cells = <1>;
++		interrupt-map-mask = <0 0 0 0>;
++		interrupt-map = <0 0 0 0 &gic GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
++		num-lanes = <1>;
++		num-viewport = <4>;
++		max-link-speed = <3>;
++		phys = <&pcie_phy>;
++		phy-names = "pcie-phy";
++		status = "disabled";
++	};
++
++	pcie_epc: pcie_epc@11000000 {
++		compatible = "telechips,tcc805x-pcie-ep";
++		reg = <0 0x11000000 0 0x410000
++			0 0x11120000 0 0x10000
++			5 0x00000000 0 0x100000>;
++		reg-names = "dbi", "link", "addr_space";
++		interrupts = <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>,
++			<GIC_SPI 374 IRQ_TYPE_LEVEL_HIGH>;
++		resets = <&pmu_rst RESET_PCIE>;
++		max-link-speed = <3>;
++		num-lanes = <1>;
++		num-ib-windows = <4>;
++		num-ob-windows = <4>;
++		phys = <&pcie_phy>;
++		phy-names = "pcie-phy";
++		status = "disabled";
++	};
+ 
+         ictc: ictc {
+                 compatible = "telechips,ictc";
+diff --git a/drivers/pci/controller/dwc/Kconfig b/drivers/pci/controller/dwc/Kconfig
+index fe9768db0f56..02b53d1175b6 100644
+--- a/drivers/pci/controller/dwc/Kconfig
++++ b/drivers/pci/controller/dwc/Kconfig
+@@ -268,28 +268,6 @@ config PCIE_AL
+ 	  required only for DT-based platforms. ACPI platforms with the
+ 	  Annapurna Labs PCIe controller don't need to enable this.
+ 
+-config PCI_TCC
+-        bool "Telechips PCIe controller"
+-        depends on SOC_TCC
+-        select PCIEPORTBUS
+-        select PCIE_DW
+-	help
+-	  This selects the TCC PCIe controller/PHY support.
+-	  Select this if you have a PCIe interface on platform.
+-	  The PCI controller on TCC is based on DesignWare hardware
+-	  and therefore the driver re-uses the DesignWare core functions to
+-	  implement the driver.
+-
+-config PCI_DOLPHIN3
+-    bool "Telechips PCIe controller, Dolphin3"
+-    depends on SOC_TCC
+-    depends on PCI_MSI_IRQ_DOMAIN
+-    select PCIE_DW_HOST
+-    help
+-      This selects the TCC PCIe controller/PHY support.
+-      Select this if you have a PCIe interface on platform.
+-      The PCI controller on TCC is based on DesignWare hardware
+-      and therefore the driver re-uses the DesignWare core functions to
+-      implement the driver.
++source "drivers/pci/controller/dwc/dolphin/Kconfig"
+ 
+ endmenu
+diff --git a/drivers/pci/controller/dwc/Makefile b/drivers/pci/controller/dwc/Makefile
+index 646dca18b2f5..89b70b357876 100644
+--- a/drivers/pci/controller/dwc/Makefile
++++ b/drivers/pci/controller/dwc/Makefile
+@@ -18,8 +18,6 @@ obj-$(CONFIG_PCIE_HISI_STB) += pcie-histb.o
+ obj-$(CONFIG_PCI_MESON) += pci-meson.o
+ obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
+ obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
+-obj-$(CONFIG_PCI_DOLPHIN3) += pci-dolphin3.o
+-obj-$(CONFIG_PCI_TCC) += pci-tcc.o
+ 
+ # The following drivers are for devices that use the generic ACPI
+ # pci_root.c driver but don't support standard ECAM config access.
+@@ -35,3 +33,5 @@ ifdef CONFIG_PCI
+ obj-$(CONFIG_ARM64) += pcie-al.o
+ obj-$(CONFIG_ARM64) += pcie-hisi.o
+ endif
++
++obj-y += dolphin/
+diff --git a/drivers/pci/controller/dwc/dolphin/Kconfig b/drivers/pci/controller/dwc/dolphin/Kconfig
+new file mode 100644
+index 000000000000..9ce41e18691d
+--- /dev/null
++++ b/drivers/pci/controller/dwc/dolphin/Kconfig
+@@ -0,0 +1,41 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Copyright (C) 2023 Telechips Inc.
++#
++#
++#
++
++config PCI_DOLPHIN
++	tristate "Telechips PCIe controller"
++	depends on ARCH_TCC
++	select PHY_SEC_LN08LPP_PCIE if ARCH_TCC807X
++	select PHY_SS_LN14LPP_PCIE if (ARCH_TCC805X || ARCH_TCC750X)
++	select PHY_SEC_LN14LPP_PCIE if ARCH_TCC803X
++	help
++	  This selects the TCC PCIe controller support.
++	  Select this if you have a PCIe interface on platform.
++	  The PCI controller on TCC is based on DesignWare hardware
++	  and therefore the driver re-uses the DesignWare core functions to
++	  implement the driver.
++
++config PCI_DOLPHIN_HOST
++	bool "Telechips Dolphin series PCIe controller Host mode"
++	depends on PCI_DOLPHIN
++	depends on PCI_MSI_IRQ_DOMAIN
++	select PCIE_DW_HOST
++	help
++	  Enables support for the PCIe controller in the Telechips SoC to work
++	  in host mode. This controller can work either as EP or RC.
++	  This uses the DesignWare core.
++
++config PCI_DOLPHIN_EP
++	bool "Telechips Dolphin series PCIe controller Endpoint mode"
++	depends on PCI_DOLPHIN && PCI_ENDPOINT && !ARCH_TCC803X
++	depends on PCI_MSI_IRQ_DOMAIN
++	select PCIE_DW_EP
++	help
++	  Enables support for the PCIe controller in the Telechips SoC to work
++	  in endpoint mode. This controller can work either as EP or RC.
++	  This uses the DesignWare core.
++
++
+diff --git a/drivers/pci/controller/dwc/dolphin/Makefile b/drivers/pci/controller/dwc/dolphin/Makefile
+new file mode 100644
+index 000000000000..527a0615eb9a
+--- /dev/null
++++ b/drivers/pci/controller/dwc/dolphin/Makefile
+@@ -0,0 +1,7 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Copyright (C) 2023 Telechips Inc.
++#
++#
++#
++obj-$(CONFIG_PCI_DOLPHIN) += pci-dolphin.o
+diff --git a/drivers/pci/controller/dwc/dolphin/pci-dolphin.c b/drivers/pci/controller/dwc/dolphin/pci-dolphin.c
+new file mode 100644
+index 000000000000..013e2a053678
+--- /dev/null
++++ b/drivers/pci/controller/dwc/dolphin/pci-dolphin.c
+@@ -0,0 +1,2039 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright (C) Telechips Inc.
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/of_pci.h>
++#include <linux/of_platform.h>
++#include <linux/of_address.h>
++#include <linux/pci.h>
++#include <linux/reset.h>
++#include <linux/platform_device.h>
++#include <linux/resource.h>
++#include <linux/delay.h>
++#include <linux/interrupt.h>
++#include <linux/time.h>
++#include <linux/phy/phy.h>
++#include <linux/debugfs.h>
++#include <linux/irqdomain.h>
++#include <linux/pinctrl/consumer.h>
++
++#include "../pcie-designware.h"
++#include "pci-dolphin.h"
++
++#define to_dolphin_pcie(x)	dev_get_drvdata((x)->dev)
++
++#define to_phy_submode(r, m) \
++	(((r) << 4) | (m))
++#define phy_set_clk(phy, mode) \
++	phy_set_mode_ext(phy, PHY_MODE_PCIE, mode)
++
++enum dolphin_pcie_gen {
++	PCIE_GEN1 = 1,
++	PCIE_GEN2,
++	PCIE_GEN3,
++	PCIE_GEN4,
++};
++
++enum dolphin_pcie_reg_type {
++	DP_PCIE_REG_UNKNOWN,
++	DP_PCIE_REG_LINK,
++};
++
++enum dolphin_pcie_variants {
++	TCC803X,
++	TCC805X,
++	TCC807X,
++	TCC750X,
++};
++
++enum dolphin_pcie_link_state {
++	PCIE_LINK_DOWN = 0,
++	PCIE_LINK_UP,
++};
++
++struct dolphin_pcie_of_data {
++	enum dolphin_pcie_variants variant;
++	enum dw_pcie_device_mode mode;
++};
++
++enum dolphin_pcie_loopback_mode {
++	LOOPBACK_MODE_NONE,
++	LOOPBACK_MODE_LOCAL_DIGITAL,
++	LOOPBACK_MODE_LOCAL_ANALOG,
++	LOOPBACK_MODE_REMOTE_DIGITAL,
++};
++
++enum dolphin_pcie_msg_route {
++	DP_PCIE_MSG_ROUTE_TO_RC = 0,
++	DP_PCIE_MSG_ROUTE_BY_ADDR,
++	DP_PCIE_MSG_ROUTE_BY_ID,
++	DP_PCIE_MSG_BROADCAST_DOWNSTREAM,
++	DP_PCIE_MSG_TERMINATE_AT_RC,
++	DP_PCIE_MSG_GNR_TO_RC,
++	DP_PCIE_MSG_RESERVED1,
++	DP_PCIE_MSG_RESERVED2,
++};
++
++struct dolphin_pcie {
++	struct dw_pcie		*pci;
++	void __iomem		*link_base;
++	void __iomem		*suspend_regs;
++	struct reset_control		*reset;
++	struct phy		*phy;
++	u32		refclk_type;
++	s32		irq;
++	u32		max_link_speed;
++
++	enum dolphin_pcie_variants		variant;
++	enum dw_pcie_device_mode		mode;
++#ifdef CONFIG_DEBUG_FS
++	enum dolphin_pcie_loopback_mode		loopback_mode;
++#endif
++};
++
++static s32 dolphin_pcie_backup_reg(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++
++		if (dp->suspend_regs != NULL) {
++			(void)memcpy(dp->suspend_regs,
++					pci->dbi_base,
++					PCIE_REG_BACKUP_SIZE);
++		} else {
++			err = -ENOMEM;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_restore_reg(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++
++		if (dp->suspend_regs != NULL) {
++			(void)memcpy(pci->dbi_base,
++					dp->suspend_regs,
++					PCIE_REG_BACKUP_SIZE);
++		} else {
++			err = -ENOMEM;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static inline u32 dolphin_pcie_readl(const struct dolphin_pcie *dp,
++		       enum dolphin_pcie_reg_type type, u32 offset)
++{
++	u32 ret = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++
++		switch (type) {
++		case DP_PCIE_REG_LINK:
++			ret = ioread32(dp->link_base + offset);
++			break;
++		case DP_PCIE_REG_UNKNOWN:
++		default:
++			dev_err(pci->dev, "UNKNOWN register type (%d)\n",
++					(s32)type);
++			break;
++		}
++	}
++
++	return ret;
++}
++
++static inline void dolphin_pcie_writel(const struct dolphin_pcie *dp,
++			 enum dolphin_pcie_reg_type type, u32 offset, u32 value,
++			 u32 mask)
++{
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++
++		switch (type) {
++		case DP_PCIE_REG_LINK:
++			iowrite32((ioread32(dp->link_base + offset) & ~mask)|value,
++					dp->link_base + offset);
++			break;
++		case DP_PCIE_REG_UNKNOWN:
++		default:
++			dev_err(pci->dev, "UNKNOWN register type(%d)\n",
++					(s32)type);
++			break;
++		}
++	}
++}
++
++#ifdef CONFIG_DEBUG_FS
++static s32 dolphin_pcie_grant_is_raised(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct timespec64 start, end, gap;
++		u32 mask;
++
++		mask = PCIE_LINK_CFG_VEN_MSG_GRANT_MASK;
++		ktime_get_ts64(&start);
++		while ((dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00) & mask) == 0x0U) {
++			ktime_get_ts64(&end);
++			gap = timespec64_sub(end, start);
++			if ((timespec64_to_ns(&gap)/NSEC_PER_MSEC) > PCIE_VDM_GRANT_TIMEOUT) {
++				err = -EBUSY;
++				break;
++			} else {
++				mdelay(PCIE_VDM_GRANT_DELAY);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_send_vdm(void *data, u64 msg)
++{
++	s32 err = 0;
++
++	if (data != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)data;
++		const struct dw_pcie *pci = dp->pci;
++		u32 val, mask;
++
++		/* Clear VEN_MSG_REQ */
++		val = 0x0U;
++		mask = PCIE_LINK_CFG_VEN_MSG_REQ_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* Set VEN_MSG_FMT (Should be set to 0x1) */
++		val = ((u32)0x1U << PCIE_LINK_CFG_VEN_MSG_FMT_SHIFT);
++		mask = PCIE_LINK_CFG_VEN_MSG_FMT_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* Set VEN_MSG_LEN (Should be set to 0x0) */
++		val = 0x0U;
++		mask = PCIE_LINK_CFG_VEN_MSG_LEN_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* Set VEN_MSG_TYPE (Routing: Route to RC)*/
++		val = PCIE_LINK_CFG_VEN_MSG_TYPE(DP_PCIE_MSG_ROUTE_TO_RC);
++		mask = PCIE_LINK_CFG_VEN_MSG_TYPE_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* Set VEN_MSG_CODE (Vendor Defined Message 0) */
++		val = ((u32)0x7EU << PCIE_LINK_CFG_VEN_MSG_CODE_SHIFT);
++		mask = PCIE_LINK_CFG_VEN_MSG_CODE_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG01, val, mask);
++
++		/* Set Vendor ID */
++		val = ((u32)dp->variant << PCIE_LINK_CFG_VENDOR_ID_SHIFT);
++		mask = PCIE_LINK_CFG_VENDOR_ID_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG03, val, mask);
++
++		/* Set Vendor defined data */
++		val = lower_32_bits(msg);
++		mask = PCIE_LINK_CFG_VDM_DATA_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG02, val, mask);
++
++		/* Set VEN_MSG_REQ */
++		val = ((u32)0x1U << PCIE_LINK_CFG_VEN_MSG_REQ_SHIFT);
++		mask = PCIE_LINK_CFG_VEN_MSG_REQ_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* wait for VEN_MSG_GRANT */
++		err = dolphin_pcie_grant_is_raised(dp);
++		if (err != 0) {
++			dev_err(pci->dev, "Failed to write vdm(%d)\n", err);
++		}
++
++		/* Clear VEN_MSG_REQ */
++		val = ((u32)0x0U << PCIE_LINK_CFG_VEN_MSG_REQ_SHIFT);
++		mask = PCIE_LINK_CFG_VEN_MSG_REQ_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++
++		/* Clear VEN_MSG_GRANT */
++		val = ((u32)0x1U << PCIE_LINK_CFG_VEN_MSG_GRANT_SHIFT);
++		mask = PCIE_LINK_CFG_VEN_MSG_GRANT_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG00, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_recv_vdm(void *data, u64 *msg)
++{
++	s32 err = 0;
++
++	if ((data != NULL) && (msg != NULL)) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)data;
++		u32 val, mask;
++
++		mask = PCIE_LINK_CFG_RADM_VENDOR_MSG_MASK;
++		val = dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG30) & mask;
++		if (val != 0x0U) {
++			dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG30, val, mask);
++			*msg = (u64)dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG31);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_disable_loopback(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		u32 val, mask;
++
++		dw_pcie_dbi_ro_wr_en(pci);
++
++		switch (dp->loopback_mode) {
++		case LOOPBACK_MODE_LOCAL_ANALOG:
++		case LOOPBACK_MODE_REMOTE_DIGITAL:
++			mask = PCIE_DBI_LOOPBACK_ENABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL);
++			val &= ~mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL, val);
++			break;
++		case LOOPBACK_MODE_LOCAL_DIGITAL:
++			mask = PCIE_DBI_PIPE_LOOPBACK_MASK;
++			/* 1. Clear PIPE_LOOPBACK in PIPE_LOOPBACK_CONTROL_OFF */
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PIPE_LOOPBACK_CONTROL);
++			val &= ~mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PIPE_LOOPBACK_CONTROL, val);
++
++			/* 2. Clear LOOPBACK_ENABLE in PORT_LINK_CTRL_OFF */
++			mask = PCIE_DBI_LOOPBACK_ENABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL);
++			val &= ~mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL, val);
++			break;
++		case LOOPBACK_MODE_NONE:
++		default:
++			err = -EINVAL;
++			break;
++		}
++
++		dw_pcie_dbi_ro_wr_dis(pci);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_enable_loopback(const struct dolphin_pcie *dp, enum dolphin_pcie_loopback_mode mode)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		u32 val, mask;
++
++		dw_pcie_dbi_ro_wr_en(pci);
++
++		switch (mode) {
++		case LOOPBACK_MODE_LOCAL_ANALOG:
++		case LOOPBACK_MODE_REMOTE_DIGITAL:
++			mask = PCIE_DBI_LOOPBACK_ENABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL);
++			val |= mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL, val);
++			break;
++		case LOOPBACK_MODE_LOCAL_DIGITAL:
++			/* 1. Set GEN3_EQUALIZATION_DISABLE in the GEN3_RELATED_OFF */
++			mask = PCIE_DBI_GEN3_EQUALIZATION_DISABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN3_RELATED);
++			val |= mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN3_RELATED, val);
++
++			/* 2. Set the PIPE_LOOPBACK in the PIPE_LOOPBACK_CONTROL_OFF register.*/
++			mask = PCIE_DBI_PIPE_LOOPBACK_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PIPE_LOOPBACK_CONTROL);
++			val |= mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PIPE_LOOPBACK_CONTROL, val);
++
++			/* 3. Set the LOOPBACK_ENABLE in the PORT_LINK_CTRL_OFF register */
++			mask = PCIE_DBI_LOOPBACK_ENABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL);
++			val |= mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL, val);
++			break;
++		case LOOPBACK_MODE_NONE:
++		default:
++			err = -EINVAL;
++			break;
++		}
++
++		dw_pcie_dbi_ro_wr_dis(pci);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_loopback_get_mode(void *data, u64 *val)
++{
++	s32 err = 0;
++
++	if ((data != NULL) && (val != NULL)) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)data;
++
++		*val = (u64)dp->loopback_mode;
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_loopback_set_mode(void *data, u64 val)
++{
++	s32 err = 0;
++
++	if (data != NULL) {
++		struct dolphin_pcie *dp = (struct dolphin_pcie *)data;
++		enum dolphin_pcie_loopback_mode mode;
++
++		if (val <= (u64)LOOPBACK_MODE_REMOTE_DIGITAL) {
++			mode = (enum dolphin_pcie_loopback_mode)val;
++
++			switch (mode) {
++			case LOOPBACK_MODE_NONE:
++				err = dolphin_pcie_disable_loopback((const struct dolphin_pcie *)dp);
++				break;
++			case LOOPBACK_MODE_LOCAL_DIGITAL:
++			case LOOPBACK_MODE_LOCAL_ANALOG:
++			case LOOPBACK_MODE_REMOTE_DIGITAL:
++				err = dolphin_pcie_enable_loopback((const struct dolphin_pcie *)dp, mode);
++				break;
++			default:
++				err = -EINVAL;
++				break;
++			}
++		} else {
++			err = -EINVAL;
++		}
++
++		if (err == 0) {
++			dp->loopback_mode = mode;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_get_link_speed(void *data, u64 *speed)
++{
++	s32 err = 0;
++
++	if ((data != NULL) && (speed != NULL)) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)data;
++		struct dw_pcie *pci = dp->pci;
++		u32 val, mask;
++
++		mask = PCIE_CAP_LINK_SPEED_MASK;
++		val = dw_pcie_readl_dbi(pci, DBI_PCIE_CAP_LINK_CONTROL) & mask;
++		val = val >> PCIE_CAP_LINK_SPEED_SHIFT;
++		*speed = (u64)val;
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_set_link_speed(void *data, u64 speed)
++{
++	s32 err = 0;
++
++	if (data != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)data;
++		struct dw_pcie *pci = dp->pci;
++
++		if (speed > (u64)PCIE_GEN4) {
++			err = -EINVAL;
++		} else {
++			u32 val, mask;
++
++			dw_pcie_dbi_ro_wr_en(pci);
++
++			mask = PCIE_DBI_TARGET_LINK_SPEED_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_CAP_LINK_CONTROL2) & ~mask;
++			val |= ((u32)speed << PCIE_DBI_TARGET_LINK_SPEED_SHIFT);
++			dw_pcie_writel_dbi(pci, DBI_PCIE_CAP_LINK_CONTROL2, val);
++
++			mask = PCIE_DBI_DIRECT_SPEED_CHANGE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN2_CTRL) & ~mask;
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN2_CTRL, val);
++
++			val |= ((u32)0x1U << PCIE_DBI_DIRECT_SPEED_CHANGE_SHIFT);
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN2_CTRL, val);
++
++			dw_pcie_dbi_ro_wr_dis(pci);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++DEFINE_SIMPLE_ATTRIBUTE(dolphin_pcie_link_speed_fops, dolphin_pcie_get_link_speed,
++		dolphin_pcie_set_link_speed, "%llu\n");
++
++DEFINE_SIMPLE_ATTRIBUTE(dolphin_pcie_loopback_fops, dolphin_pcie_loopback_get_mode,
++			dolphin_pcie_loopback_set_mode, "%llu\n");
++
++DEFINE_SIMPLE_ATTRIBUTE(dolphin_pcie_vdm_fops, dolphin_pcie_recv_vdm, dolphin_pcie_send_vdm,
++			"%llu\n");
++
++static s32 dolphin_pcie_debugfs_init(struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		struct device *dev = pci->dev;
++		const char *name;
++
++		name = devm_kasprintf(dev, GFP_KERNEL, "%pOFP", dev->of_node);
++		if (name != NULL) {
++			struct dentry *dbgfs_dir;
++
++			dbgfs_dir = debugfs_create_dir(name, NULL);
++			(void)debugfs_create_file("link_speed", ((uint16_t)0x180),
++					dbgfs_dir, (void *)dp,
++					&dolphin_pcie_link_speed_fops);
++			(void)debugfs_create_file("loopback_mode", ((uint16_t)0x180),
++					dbgfs_dir, (void *)dp,
++					&dolphin_pcie_loopback_fops);
++			(void)debugfs_create_file("vdm", ((uint16_t)0x180), dbgfs_dir,
++					(void *)dp, &dolphin_pcie_vdm_fops);
++		} else {
++			err = -ENOMEM;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++#endif
++
++static s32 dolphin_pcie_reset_control(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		if (IS_ENABLED(CONFIG_RESET_TCC) != 0) {
++			if (dp->reset != NULL) {
++				err = reset_control_assert(dp->reset);
++				if (err == 0) {
++					mdelay(10);
++					err = reset_control_deassert(dp->reset);
++				}
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_disable_irq(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++		const struct pcie_port *pp = &pci->pp;
++		s32 irq;
++
++		irq = (dp->mode == DW_PCIE_RC_TYPE) ? pp->irq : dp->irq;
++		if (irq >= 0) {
++			disable_irq((u32)irq);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_enable_irq(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = dp->pci;
++		const struct pcie_port *pp = &pci->pp;
++		s32 irq;
++
++		irq = (dp->mode == DW_PCIE_RC_TYPE) ? pp->irq : dp->irq;
++		if (irq > 0) {
++			enable_irq((u32)irq);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_gen4_init(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		u32 val, mask;
++
++		dw_pcie_dbi_ro_wr_en(pci);
++
++		if (dp->max_link_speed >= (u32)PCIE_GEN3) {
++			mask = GEN3_EQ_PSET_REQ_VEC_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN3_EQ_CONTROL_OFF) & ~mask;
++			val |= ((u32)0x59FU << GEN3_EQ_PSET_REQ_VEC_SHIFT);
++			dw_pcie_writel_dbi(pci,  DBI_PCIE_PORT_LOGIC_GEN3_EQ_CONTROL_OFF, val);
++		}
++
++		if (dp->max_link_speed == (u32)PCIE_GEN4) {
++			mask = GEN4_RXMARGIN_MAX_VOLTAGE_OFFSET_MASK |
++				GEN4_RXMARGIN_NUM_VOLTAGE_STEPS_MASK |
++				GEN4_RXMARGIN_MAX_TIMING_OFFSET_MASK |
++				GEN4_RXMARGIN_NUM_TIMING_STEPS_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN4_LANE_MARGINING2) & ~mask;
++			val |= ((u32)0x1FU << GEN4_RXMARGIN_NUM_TIMING_STEPS_SHIFT);
++			val |= ((u32)0x32U << GEN4_RXMARGIN_MAX_TIMING_OFFSET_SHIFT);
++			val |= ((u32)0x7FU << GEN4_RXMARGIN_NUM_VOLTAGE_STEPS_SHIFT);
++			val |= ((u32)0x28U << GEN4_RXMARGIN_MAX_VOLTAGE_OFFSET_SHIFT);
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN4_LANE_MARGINING2, val);
++		}
++
++		mask = AX_MSTR_ORDR_P_EVENT_SEL_MASK;
++		val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_AMBA_ORDERING_CTRL) & ~mask;
++		val |= ((u32)0x1U << AX_MSTR_ORDR_P_EVENT_SEL_SHIFT);
++		dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_AMBA_ORDERING_CTRL, val);
++
++		dw_pcie_dbi_ro_wr_dis(pci);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_clear_slv_addr_mask(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val, mask;
++
++		val = 0x0U;
++		mask = PCIE_LINK_CFG_SLV_ADDR_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG53,
++				val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_dev_type(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val;
++
++		switch (dp->mode) {
++		case DW_PCIE_RC_TYPE:
++			val = ((u32)0x4U  << PCIE_LINK_CFG_DEVICE_TYPE_SHIFT);
++			break;
++		case DW_PCIE_EP_TYPE:
++			val = 0x0U;
++			break;
++		case DW_PCIE_LEG_EP_TYPE:
++		case DW_PCIE_UNKNOWN_TYPE:
++		default:
++			err = -ENODEV;
++			break;
++		}
++
++		if (err == 0) {
++			u32 mask;
++
++			mask = PCIE_LINK_CFG_DEVICE_TYPE_MASK;
++			dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG89,
++					val, mask);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_max_link_speed(struct dw_pcie *pci)
++{
++	s32 err = 0;
++
++	if (pci != NULL) {
++		struct dolphin_pcie *dp = (struct dolphin_pcie *)to_dolphin_pcie(pci);
++		u32 val, mask;
++
++		dw_pcie_dbi_ro_wr_en(pci);
++		mask = PCIE_DBI_TARGET_LINK_SPEED_MASK;
++		val = dw_pcie_readl_dbi(pci, DBI_PCIE_CAP_LINK_CONTROL2) & ~mask;
++		val |= ((u32)dp->max_link_speed << PCIE_DBI_TARGET_LINK_SPEED_SHIFT);
++		dw_pcie_writel_dbi(pci, DBI_PCIE_CAP_LINK_CONTROL2, val);
++		dw_pcie_dbi_ro_wr_dis(pci);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_layer(struct dw_pcie *pci)
++{
++	s32 err = 0;
++
++	if (pci != NULL) {
++		struct dolphin_pcie *dp = (struct dolphin_pcie *)to_dolphin_pcie(pci);
++		u32 val, mask;
++
++		dw_pcie_dbi_ro_wr_en(pci);
++		if (dp->max_link_speed >= (u32)PCIE_GEN2) {
++			mask = PCIE_DBI_DIRECT_SPEED_CHANGE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN2_CTRL) & ~mask;
++			val |= ((u32)0x1U << PCIE_DBI_DIRECT_SPEED_CHANGE_SHIFT);
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN2_CTRL, val);
++		}
++
++		if (dp->max_link_speed >= (u32)PCIE_GEN3) {
++			mask = PCIE_DBI_EQ_REDO_DISABLE_MASK;
++			val = dw_pcie_readl_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN3_RELATED) & ~mask;
++			val |= ((u32)0x1U << PCIE_DBI_EQ_REDO_DISABLE_SHIFT);
++			dw_pcie_writel_dbi(pci, DBI_PCIE_PORT_LOGIC_GEN3_RELATED, val);
++		}
++		dw_pcie_dbi_ro_wr_dis(pci);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_init_phy(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		err = phy_init(dp->phy);
++		if (err == 0) {
++			err = dolphin_pcie_gen4_init(dp);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_defaults(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++
++		err = dolphin_pcie_init_phy(dp);
++		if (err == 0) {
++			err = dolphin_pcie_clear_slv_addr_mask(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_dev_type(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_max_link_speed(pci);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_layer(pci);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_enable_ltssm(const struct dolphin_pcie *dp, bool enable)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val, mask;
++
++		val = enable ? ((u32)0x1U << PCIE_LINK_CFG_LTSSM_ENABLE_SHIFT) : 0x0U;
++		mask = PCIE_LINK_CFG_LTSSM_ENABLE_MASK;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG04,
++				val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_clear_cactive(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val, mask;
++
++		val = 0x0U;
++		mask = 0xFFFFFFFFU;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG07,
++				val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_clear_interrupts(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val, mask;
++
++		val = 0xFFFFFFFFU;
++		mask = val;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG25,
++				val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_enable_interrupt(const struct dolphin_pcie *dp, bool enable)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 offset, val, mask;
++
++		mask = PCIE_LINK_CFG_INTR_EN_MASK;
++		val = enable ? mask : 0x0U;
++		offset = (dp->variant == TCC803X) ? PCIE_LINK_CFG04 : PCIE_LINK_CFG91;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, offset, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_interrupt(const struct dolphin_pcie *dp, bool enable)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		err = dolphin_pcie_clear_interrupts(dp);
++		if (err == 0) {
++			err = dolphin_pcie_enable_interrupt(dp, enable);
++		}
++
++		if (err == 0) {
++			if ((IS_ENABLED(CONFIG_PCI_MSI) != 0) &&
++					(dp->mode == DW_PCIE_RC_TYPE)) {
++				struct dw_pcie *pci = dp->pci;
++				struct pcie_port *pp = &pci->pp;
++
++				dw_pcie_msi_init(pp);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static void dolphin_pcie_write_dbi(struct dw_pcie *pci, void __iomem *base,
++		u32 reg, size_t size, u32 val)
++{
++	if (pci != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++		u32 write_val = val;
++		s32 sz;
++
++		if (dp->variant == TCC803X) {
++			if ((reg == 0x90cU) ||
++					(reg == 0x914U)) {
++				if (((val & 0xFFF00000U) == 0x11000000U)
++						|| ((val & 0xFFF00000U) == 0x11600000U)
++						|| ((val & 0xFFF00000U) == 0x11700000U)
++						|| ((val & 0xFFF00000U) == 0x11800000U)
++				   ) {
++					write_val &= 0x00FFFFFFU;
++				}
++			}
++		} else {
++			if ((reg == 0x00000CU) ||
++					(reg == 0x00020CU) ||
++					(reg == 0x00030CU) ||
++					(reg == 0x00040CU)) {
++				write_val = 0x0U;
++			}
++		}
++
++		if (!__builtin_add_overflow(size, 0, &sz)) {
++			if (dw_pcie_write(base + reg, sz, write_val) != 0) {
++				dev_err(pci->dev, "failed to write dbi register(0x%08x)\n", reg);
++			}
++		}
++	}
++}
++
++static void dolphin_pcie_set_dbi2_mode(const struct dolphin_pcie *dp, bool enable)
++{
++	if (dp != NULL) {
++		if ((dp->variant == TCC805X) || (dp->variant == TCC807X)) {
++			u32 val, mask;
++
++			if (enable) {
++				val = PCIE_LINK_CFG_INDIRECT_ADDR_MASK;
++				mask = 0x0U;
++				dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG88,
++						val, mask);
++			} else {
++				val = 0x0U;
++				mask = PCIE_LINK_CFG_INDIRECT_ADDR_MASK;
++				dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG88,
++						val, mask);
++			}
++		}
++	}
++}
++
++static void dolphin_pcie_write_dbi2(struct dw_pcie *pci, void __iomem *base, u32 reg,
++		size_t size, u32 val)
++{
++	if (pci != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++		s32 sz, err;
++
++		err = 0;
++		if (!__builtin_add_overflow(size, 0, &sz)) {
++			if ((dp->variant == TCC805X) || (dp->variant == TCC807X)) {
++				reg |= PCIE_LINK_CFG_INDIRECT_ADDR_MASK;
++				dolphin_pcie_set_dbi2_mode(dp, true);
++				err = dw_pcie_write(base + reg, sz, val);
++				dolphin_pcie_set_dbi2_mode(dp, false);
++			} else {
++				err = dw_pcie_write(base + reg, sz, val);
++			}
++		}
++
++		if (err != 0) {
++			dev_err(pci->dev, "failed to write dbi2 register(%d)\n", err);
++		}
++	}
++}
++
++static s32 dolphin_pcie_link_up(struct dw_pcie *pci)
++{
++	s32 err = (s32)PCIE_LINK_DOWN;
++
++	if (pci != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++		u32 val;
++
++		val = dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG26);
++		if ((val & PCIE_LINK_CFG_RDLH_LINK_UP_MASK) != 0x0U) {
++			val = dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG33);
++			if ((val & PCIE_LINK_CFG_SMLH_LINK_UP_MASK) != 0x0U) {
++				err = (s32)PCIE_LINK_UP;
++			}
++		}
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_check_link_up(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		struct timespec64 start, end, gap;
++
++		ktime_get_ts64(&start);
++		do {
++			err = dolphin_pcie_link_up(pci);
++			ktime_get_ts64(&end);
++			gap = timespec64_sub(end, start);
++			if ((timespec64_to_ns(&gap)/NSEC_PER_MSEC) > PCIE_LINK_UP_TIMEOUT) {
++				err = -EAGAIN;
++				break;
++			} else {
++				mdelay(PCIE_LINK_UP_DELAY);
++			}
++		} while (err != (s32)PCIE_LINK_UP);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_establish_link(struct dw_pcie *pci)
++{
++	s32 err = 0;
++
++	if (pci != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++
++		err = dolphin_pcie_enable_ltssm(dp, true);
++		if (err == 0) {
++			if (dolphin_pcie_check_link_up(dp) == (s32)PCIE_LINK_UP) {
++				dev_err(pci->dev, "Link up\n");
++			} else {
++				dev_err(pci->dev, "timout waiting for link_up\n");
++			}
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_interrupt(dp, true);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static void	dolphin_pcie_stop_link(struct dw_pcie *pci)
++{
++	if (pci != NULL) {
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++
++		if (dolphin_pcie_enable_ltssm(dp, false) != 0) {
++			dev_err(pci->dev, "failed to disable ltssm\n");
++		}
++	}
++}
++
++static const struct dw_pcie_ops dolphin_pcie_host_ops = {
++	.write_dbi = dolphin_pcie_write_dbi,
++	.write_dbi2 = dolphin_pcie_write_dbi2,
++	.start_link = dolphin_pcie_establish_link,
++	.stop_link = dolphin_pcie_stop_link,
++	.link_up = dolphin_pcie_link_up,
++};
++
++static s32 dolphin_pcie_host_init(struct pcie_port *pp)
++{
++	s32 err = 0;
++
++	if (pp != NULL) {
++		struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
++
++		dw_pcie_setup_rc(pp);
++
++		err = pinctrl_pm_select_default_state(pci->dev);
++		if (err == 0) {
++			err = dolphin_pcie_establish_link(pci);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static const struct dw_pcie_host_ops dolphin_pcie_rc_ops = {
++	.host_init = dolphin_pcie_host_init,
++};
++
++/* MSI int handler */
++static irqreturn_t dolphin_pcie_handle_msi_irq(struct pcie_port *pp)
++{
++	irqreturn_t ret = IRQ_NONE;
++
++	if (pp != NULL) {
++		struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
++		unsigned long status, pos;
++		irq_hw_number_t hwirq;
++		u32 idx;
++
++		pos = (unsigned long)0;
++		for (idx = 0; idx < (pp->num_vectors/(u32)MAX_MSI_IRQS_PER_CTRL); idx++) {
++			status = dw_pcie_readl_dbi(pci,
++					(u32)PCIE_MSI_INTR0_STATUS + (idx * (u32)MSI_REG_CTRL_BLOCK_SIZE));
++			if (status != 0x0UL) {
++				ret = IRQ_HANDLED;
++
++				do {
++					pos = find_next_bit(&status, (unsigned long)MAX_MSI_IRQS_PER_CTRL, pos);
++					if (pos != (unsigned long)MAX_MSI_IRQS_PER_CTRL) {
++						if (!__builtin_mul_overflow(idx, MAX_MSI_IRQS_PER_CTRL, &hwirq)) {
++							if (!__builtin_add_overflow(hwirq, pos, &hwirq)) {
++								unsigned int irq = irq_find_mapping(pp->irq_domain, hwirq);
++
++								(void)generic_handle_irq(irq);
++							}
++						}
++						pos++;
++					}
++				} while (pos != (unsigned long)MAX_MSI_IRQS_PER_CTRL);
++			}
++		}
++	}
++	return ret;
++}
++
++static irqreturn_t dolphin_pcie_irq_handler(s32 irq, void *arg)
++{
++	const struct dolphin_pcie *dp = (const struct dolphin_pcie *)arg;
++	irqreturn_t ret = IRQ_HANDLED;
++
++	(void)irq;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++		struct pcie_port *pp = &pci->pp;
++		u32 val, mask;
++
++		mask = PCIE_LINK_CFG_INTX_MASK | PCIE_LINK_CFG_MSI_INT_MASK;
++		val = dolphin_pcie_readl(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG24) & mask;
++		if (val != 0x0U) {
++			if (IS_ENABLED(CONFIG_PCI_MSI) != 0) {
++				if ((dp->mode == DW_PCIE_RC_TYPE) &&
++						((val & PCIE_LINK_CFG_MSI_INT_MASK) != 0x0U)) {
++					ret = dolphin_pcie_handle_msi_irq(pp);
++				}
++			}
++
++			dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG25,
++					val, mask);
++		} else {
++			ret = IRQ_NONE;
++		}
++	}
++
++	return ret;
++}
++
++static s32 dolphin_pcie_prepare_rc(struct dolphin_pcie *dp, struct platform_device *pdev,
++		struct pcie_port *pp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) &&
++			(pdev != NULL) &&
++			(pp != NULL)) {
++		pp->ops = &dolphin_pcie_rc_ops;
++		pp->irq = platform_get_irq(pdev, 0U);
++		if (pp->irq > 0) {
++			err = devm_request_irq(&pdev->dev,
++					(u32)pp->irq, dolphin_pcie_irq_handler,
++					IRQF_SHARED, "telechips-pcie-rc",
++					dp);
++		} else {
++			err = -ENODEV;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_deassert_pwrup_reset(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		if (dp->variant != TCC803X) {
++			u32 val, mask;
++			/* deassert power up reset */
++			mask = PCIE_LINK_CFG_POWER_UP_RST_MASK;
++			val = mask;
++			dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG44, val, mask);
++
++			udelay(500); //need to find proper delay
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 dolphin_pcie_wake_up_phy(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		const struct dw_pcie *pci = (const struct dw_pcie *)dp->pci;
++
++		err = phy_power_on(dp->phy);
++		if (err == 0) {
++			err = pinctrl_pm_select_idle_state(pci->dev);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_clear_interrupts(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_deassert_pwrup_reset(dp);
++		}
++
++		if (err == 0) {
++			err = phy_reset(dp->phy);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_clksrc(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		u32 val, mask;
++
++		switch (dp->variant) {
++		case TCC803X:
++		case TCC807X:
++			if (dp->refclk_type == 0x0U) {
++				mask = PCIE_LINK_CFG_REFCLK_EXT_EN_MASK;
++				val = mask;
++				dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG08, val, mask);
++			}
++
++			mask = PCIE_LINK_CFG_PHY_REFCLK_SEL_MASK;
++			val = ((dp->refclk_type == 0U) ? (u32)0x3U : (u32)0x2U) << PCIE_LINK_CFG_PHY_REFCLK_SEL_SHIFT;
++			dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG08, val, mask);
++			break;
++		case TCC805X:
++		case TCC750X:
++			break;
++		default:
++			err = -EINVAL;
++			break;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_set_clk(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		err = dolphin_pcie_set_clksrc(dp);
++		if (err == 0) {
++			s32 submode;
++
++			if (!__builtin_add_overflow(to_phy_submode(dp->refclk_type, (u32)dp->mode), 0, &submode)) {
++				err = phy_set_clk(dp->phy, submode);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++#ifdef CONFIG_PCIE_DW_EP
++static s32 dolphin_pcie_ep_reset_bar(struct dw_pcie *pci, s32 bar)
++{
++	s32 err = 0;
++
++	if ((pci != NULL) &&
++			(bar <= (s32)BAR_5)) {
++		u32 reg;
++
++		if (!__builtin_add_overflow(PCI_BASE_ADDRESS_0, (0x4 * bar), &reg)) {
++			dw_pcie_dbi_ro_wr_en(pci);
++			dolphin_pcie_write_dbi2(pci, pci->dbi_base2, reg, SZ_4, 0x0U);
++			dw_pcie_writel_dbi(pci, reg, 0x0U);
++			dw_pcie_dbi_ro_wr_dis(pci);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_ep_get_iatu_unroll_support(struct dw_pcie *pci)
++{
++	s32 err = 0;
++
++	if (pci != NULL) {
++		u32 val;
++
++		val = dw_pcie_readl_dbi(pci, PCIE_ATU_VIEWPORT);
++		if (val == 0xFFFFFFFFU) {
++			pci->iatu_unroll_enabled = 1;
++		} else {
++			pci->iatu_unroll_enabled = 0;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static const struct pci_epc_features dolphin_pcie_epc_features = {
++	.linkup_notifier = 0x0U,
++	.msi_capable = 0x1U,
++	.msix_capable = 0x1U,
++	.align = SZ_64K,
++};
++static const struct pci_epc_features*
++				 dolphin_pcie_get_features(struct dw_pcie_ep *ep)
++{
++	(void)ep;
++
++	return &dolphin_pcie_epc_features;
++}
++
++static void dolphin_pcie_ep_init(struct dw_pcie_ep *ep)
++{
++	if (ep != NULL) {
++		struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
++		s32 bar, err;
++
++		for (bar = (s32)BAR_0; bar <= (s32)BAR_5; bar++) {
++			err = dolphin_pcie_ep_reset_bar(pci, bar);
++			if (err != 0) {
++				break;
++			}
++		}
++
++		if (err == 0) {
++			err = pinctrl_pm_select_default_state(pci->dev);
++		}
++	}
++}
++
++static s32 dolphin_pcie_ep_raise_legacy_irq(struct dw_pcie_ep *ep, u8 func_no)
++{
++	s32 err = 0;
++
++	(void)func_no;
++
++	if (ep != NULL) {
++		struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
++		const struct dolphin_pcie *dp = (const struct dolphin_pcie *)to_dolphin_pcie(pci);
++		u32 val, mask;
++
++		mask = PCIE_LINK_CFG_SYS_INT_MASK;
++		val = mask;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG57, val, mask);
++
++		val = 0x0U;
++		dolphin_pcie_writel(dp, DP_PCIE_REG_LINK, PCIE_LINK_CFG57, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_ep_raise_irq(struct dw_pcie_ep *ep, u8 func_no,
++			     enum pci_epc_irq_type type, u16 interrupt_num)
++{
++	s32 err = 0;
++
++	if (ep != NULL) {
++		struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
++		const struct pci_epc_features *epc_features = dolphin_pcie_get_features(ep);
++		u8 intr_num;
++
++		if (!__builtin_add_overflow(interrupt_num, 0, &intr_num)) {
++			switch (type) {
++			case PCI_EPC_IRQ_MSI:
++				if (epc_features->msi_capable != 0U) {
++					err = dw_pcie_ep_raise_msi_irq(ep, func_no, intr_num);
++				}
++				break;
++			case PCI_EPC_IRQ_MSIX:
++				if (epc_features->msix_capable != 0U) {
++					err = dw_pcie_ep_raise_msix_irq(ep, func_no, intr_num);
++				}
++				break;
++			case PCI_EPC_IRQ_LEGACY:
++				err = dolphin_pcie_ep_raise_legacy_irq(ep, func_no);
++				break;
++			case PCI_EPC_IRQ_UNKNOWN:
++			default:
++				dev_err(pci->dev, "INVALID DEV type : %d\n", type);
++				err = -ENODEV;
++				break;
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static struct dw_pcie_ep_ops dolphin_pcie_ep_ops = {
++	.get_features = dolphin_pcie_get_features,
++	.ep_init = dolphin_pcie_ep_init,
++	.raise_irq = dolphin_pcie_ep_raise_irq,
++};
++
++static s32 dolphin_pcie_prepare_ep(struct dolphin_pcie *dp, struct platform_device *pdev,
++		struct dw_pcie_ep *ep)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) &&
++			(pdev != NULL) &&
++			(ep != NULL)) {
++		const struct resource *res =
++			(const struct resource *)platform_get_resource_byname(pdev, IORESOURCE_MEM, "addr_space");
++
++		if (res != NULL) {
++			ep->phys_base = res->start;
++			ep->addr_size = resource_size(res);
++			ep->page_size = SZ_64K;		/* 64K alignment */
++
++			ep->ops = &dolphin_pcie_ep_ops;
++			dp->irq = platform_get_irq(pdev, 0);
++			if (dp->irq < 0) {
++				err = -ENODEV;
++			} else {
++				err = devm_request_irq(&pdev->dev,
++						(u32)dp->irq, dolphin_pcie_irq_handler,
++						IRQF_SHARED, "telechips-pcie-ep",
++						dp);
++			}
++		} else {
++			err = -ENODEV;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_add_pcie_ep(struct dolphin_pcie *dp, struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		struct dw_pcie *pci = dp->pci;
++		struct dw_pcie_ep *ep = &pci->ep;
++
++		err = dolphin_pcie_set_clk((const struct dolphin_pcie *)dp);
++		if (err == 0) {
++			err = dolphin_pcie_prepare_ep(dp, pdev, ep);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_defaults((const struct dolphin_pcie *)dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_ep_get_iatu_unroll_support(pci);
++		}
++
++		if (err == 0) {
++			pci->dbi_base2 = pci->dbi_base + PCIE_DBI2_OFFSET;
++			err = dw_pcie_ep_init(ep);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++#endif
++
++static s32 dolphin_pcie_add_pcie_port(struct dolphin_pcie *dp, struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		struct dw_pcie *pci = dp->pci;
++		struct pcie_port *pp = &pci->pp;
++
++		err = dolphin_pcie_set_clk((const struct dolphin_pcie *)dp);
++		if (err == 0) {
++			err = dolphin_pcie_prepare_rc(dp, pdev, pp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_defaults((const struct dolphin_pcie *)dp);
++		}
++
++		if (err == 0) {
++			err = dw_pcie_host_init(pp);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_add_port(struct dolphin_pcie *dp,
++		struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		err = dolphin_pcie_wake_up_phy((const struct dolphin_pcie *)dp);
++		if (err == 0) {
++			switch (dp->mode) {
++			case DW_PCIE_RC_TYPE:
++				err = dolphin_pcie_add_pcie_port(dp, pdev);
++				break;
++			case DW_PCIE_EP_TYPE:
++#ifdef CONFIG_PCIE_DW_EP
++				err = dolphin_pcie_add_pcie_ep(dp, pdev);
++				break;
++#endif
++			case DW_PCIE_UNKNOWN_TYPE:
++			case DW_PCIE_LEG_EP_TYPE:
++			default:
++				err = -ENODEV;
++				break;
++			}
++		}
++
++		if (err != 0) {
++			dev_err(&pdev->dev,
++					"failed to init controller as %s mode\n",
++					(dp->mode == DW_PCIE_EP_TYPE) ? "EP" : "RC");
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_parse_regs(struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		struct resource *res;
++
++		res = platform_get_resource_byname(pdev,
++				IORESOURCE_MEM, "link");
++		if (res != NULL) {
++			dp->link_base = devm_ioremap(&pdev->dev,
++					res->start, resource_size(res));
++			if (IS_ERR(dp->link_base)) {
++				err = (s32)PTR_ERR(dp->link_base);
++			}
++		} else {
++			err = -ENODEV;
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev,
++					IORESOURCE_MEM, "dbi");
++			if (res != NULL) {
++				struct dw_pcie *pci = dp->pci;
++
++				pci->dbi_base = devm_ioremap(&pdev->dev,
++						res->start, resource_size(res));
++				if (IS_ERR(pci->dbi_base)) {
++					err = (s32)PTR_ERR(pci->dbi_base);
++				}
++			} else {
++				err = -ENODEV;
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static const struct	dolphin_pcie_of_data dp_pcie_tcc803x_rc_of_data = {
++	.mode = DW_PCIE_RC_TYPE,
++	.variant = TCC803X,
++};
++
++static const struct	dolphin_pcie_of_data dp_pcie_tcc807x_rc_of_data = {
++	.mode = DW_PCIE_RC_TYPE,
++	.variant = TCC807X,
++};
++static const struct	dolphin_pcie_of_data dp_pcie_tcc807x_ep_of_data = {
++	.mode = DW_PCIE_EP_TYPE,
++	.variant = TCC807X,
++};
++
++static const struct	dolphin_pcie_of_data dp_pcie_tcc805x_rc_of_data = {
++	.mode = DW_PCIE_RC_TYPE,
++	.variant = TCC805X,
++};
++static const struct	dolphin_pcie_of_data dp_pcie_tcc805x_ep_of_data = {
++	.mode = DW_PCIE_EP_TYPE,
++	.variant = TCC805X,
++};
++static const struct	dolphin_pcie_of_data dp_pcie_tcc750x_rc_of_data = {
++	.mode = DW_PCIE_RC_TYPE,
++	.variant = TCC750X,
++};
++static const struct	dolphin_pcie_of_data dp_pcie_tcc750x_ep_of_data = {
++	.mode = DW_PCIE_EP_TYPE,
++	.variant = TCC750X,
++};
++
++static const struct of_device_id dolphin_pcie_of_match[] = {
++	{
++		.compatible = "telechips,tcc803x-pcie",
++		.data = &dp_pcie_tcc803x_rc_of_data,
++	},
++	{
++		.compatible = "telechips,tcc805x-pcie",
++		.data = &dp_pcie_tcc805x_rc_of_data,
++	},
++	{
++		.compatible = "telechips,tcc805x-pcie-ep",
++		.data = &dp_pcie_tcc805x_ep_of_data,
++	},
++	{
++		.compatible = "telechips,tcc750x-pcie",
++		.data = &dp_pcie_tcc750x_rc_of_data,
++	},
++	{
++		.compatible = "telechips,tcc750x-pcie-ep",
++		.data = &dp_pcie_tcc750x_ep_of_data,
++	},
++	{
++		.compatible = "telechips,tcc807x-pcie",
++		.data = &dp_pcie_tcc807x_rc_of_data,
++	},
++	{
++		.compatible = "telechips,tcc807x-pcie-ep",
++		.data = &dp_pcie_tcc807x_ep_of_data,
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, dolphin_pcie_of_match);
++
++static s32 dolphin_pcie_get_of_data(const struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (dp != NULL)) {
++		const struct of_device_id *match = (const struct of_device_id *)of_match_device(
++				of_match_ptr(dolphin_pcie_of_match),
++				&pdev->dev);
++
++		if (match != NULL) {
++			const struct dolphin_pcie_of_data *data =
++				(const struct dolphin_pcie_of_data *)match->data;
++
++			dp->mode = data->mode;
++			dp->variant = data->variant;
++		} else {
++			err = -ENODEV;
++		}
++
++		if (err != 0) {
++			dev_err(&pdev->dev, "failed to get of_data\n");
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_parse_phy(struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		dp->phy = devm_phy_get(&pdev->dev, "pcie-phy");
++		if (IS_ERR(dp->phy)) {
++			dev_err(&pdev->dev, "Failed to get pcie phy. please check your configuration.\n");
++			err = PTR_ERR(dp->phy);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_parse_reset(struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		if (IS_ENABLED(CONFIG_RESET_TCC) != 0) {
++			dp->reset = devm_reset_control_get(&pdev->dev, NULL);
++			if (IS_ERR(dp->reset)) {
++				err = (s32)PTR_ERR(dp->reset);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_parse_props(struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		err = of_property_read_u32(pdev->dev.of_node,
++				"refclk_type", &dp->refclk_type);
++
++		if (err == 0) {
++			err = of_property_read_u32(pdev->dev.of_node,
++					"max-link-speed", &dp->max_link_speed);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_parse_dt(struct platform_device *pdev,
++		struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if ((dp != NULL) && (pdev != NULL)) {
++		err = dolphin_pcie_parse_regs(pdev, dp);
++
++		if (err == 0) {
++			err = dolphin_pcie_parse_phy(pdev, dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_parse_reset(pdev, dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_parse_props(pdev, dp);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static struct dolphin_pcie *dolphin_pcie_alloc_drvdata(struct platform_device *pdev)
++{
++	struct dolphin_pcie *dp = NULL;
++
++	if (pdev != NULL) {
++		dp = devm_kzalloc(&pdev->dev,
++				sizeof(struct dolphin_pcie), GFP_KERNEL);
++		if (dp != NULL) {
++			dp->pci = devm_kzalloc(&pdev->dev,
++					sizeof(struct dw_pcie), GFP_KERNEL);
++			if (dp->pci != NULL) {
++				dp->suspend_regs = kzalloc(
++						PCIE_REG_BACKUP_SIZE, GFP_KERNEL);
++				if (IS_ERR_OR_NULL(dp->suspend_regs)) {
++					devm_kfree(&pdev->dev, dp->pci);
++				}
++			}
++
++			if (IS_ERR_OR_NULL(dp->pci)) {
++				devm_kfree(&pdev->dev, dp);
++			}
++		}
++	}
++
++	return dp;
++}
++
++static int dolphin_pcie_probe(struct platform_device *pdev)
++{
++	struct dolphin_pcie *dp;
++	s32 err = 0;
++
++	if (pdev != NULL) {
++		dp = dolphin_pcie_alloc_drvdata(pdev);
++		if (dp != NULL) {
++			err = dolphin_pcie_get_of_data(pdev, dp);
++			if (err == 0) {
++				err = dolphin_pcie_parse_dt(pdev, dp);
++			}
++
++			if (err == 0) {
++				dp->pci->ops = &dolphin_pcie_host_ops;
++				dp->pci->dev = &pdev->dev;
++				platform_set_drvdata(pdev, dp);
++				err = dolphin_pcie_add_port(dp, pdev);
++			}
++
++#ifdef CONFIG_DEBUG_FS
++			if (err == 0) {
++				err = dolphin_pcie_debugfs_init(dp);
++			}
++#endif
++		} else {
++			err = -ENOMEM;
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_remove(struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if (pdev != NULL) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)platform_get_drvdata(pdev);
++		const struct dw_pcie *pci = (const struct dw_pcie *)dp->pci;
++
++		err = dolphin_pcie_disable_irq(dp);
++		if (err == 0) {
++			err = pinctrl_pm_select_idle_state(pci->dev);
++		}
++
++		if (err == 0) {
++			mdelay(1);
++			err = pinctrl_pm_select_default_state(pci->dev);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_suspend(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)dev_get_drvdata(dev);
++		struct dw_pcie *pci = dp->pci;
++
++		if (dp->mode == DW_PCIE_RC_TYPE) {
++			u32 val;
++
++			val = dw_pcie_readl_dbi(pci, PCI_COMMAND);
++			val &= ~(u32)PCI_COMMAND_MEMORY;
++			dw_pcie_writel_dbi(pci, PCI_COMMAND, val);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static int dolphin_pcie_resume(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)dev_get_drvdata(dev);
++		struct dw_pcie *pci = dp->pci;
++
++		if (dp->mode == DW_PCIE_RC_TYPE) {
++			u32 val;
++
++			val = dw_pcie_readl_dbi(pci, PCI_COMMAND);
++			val |= (u32)PCI_COMMAND_MEMORY;
++			dw_pcie_writel_dbi(pci, PCI_COMMAND, val);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_reestablish_link(const struct dolphin_pcie *dp)
++{
++	s32 err = 0;
++
++	if (dp != NULL) {
++		struct dw_pcie *pci = dp->pci;
++
++		err = dolphin_pcie_reset_control(dp);
++		if (err == 0) {
++			err = dolphin_pcie_wake_up_phy(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_clk(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_set_defaults(dp);
++		}
++
++		if (err == 0) {
++			if (dp->mode == DW_PCIE_RC_TYPE) {
++				err = dolphin_pcie_host_init(&pci->pp);
++			} else if (dp->mode == DW_PCIE_EP_TYPE) {
++#ifdef CONFIG_PCIE_DW_EP
++				err = dw_pcie_ep_init(&pci->ep);
++#endif
++			} else {
++				err = -ENODEV;
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_resume_early(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)dev_get_drvdata(dev);
++
++		err = dolphin_pcie_reestablish_link(dp);
++		if (err == 0) {
++			err = dolphin_pcie_restore_reg(dp);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_enable_irq(dp);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 dolphin_pcie_suspend_late(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct dolphin_pcie *dp =
++			(const struct dolphin_pcie *)dev_get_drvdata(dev);
++
++		err = dolphin_pcie_disable_irq(dp);
++		if (err == 0) {
++			err = dolphin_pcie_backup_reg(dp);
++		}
++
++		if (err == 0) {
++			err = phy_power_off(dp->phy);
++		}
++
++		if (err == 0) {
++			err = dolphin_pcie_clear_cactive(dp);
++		}
++		if (err == 0) {
++			err = pinctrl_pm_select_sleep_state(dev);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct dev_pm_ops dolphin_pcie_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(dolphin_pcie_suspend, dolphin_pcie_resume)
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(dolphin_pcie_suspend_late,
++				      dolphin_pcie_resume_early)
++};
++
++static struct platform_driver dolphin_pcie_driver = {
++	.probe = dolphin_pcie_probe,
++	.remove = dolphin_pcie_remove,
++	.driver = {
++		.name = "telechips-pcie",
++		.pm = &dolphin_pcie_pm_ops,
++		.of_match_table = dolphin_pcie_of_match,
++	},
++};
++module_platform_driver(dolphin_pcie_driver);
++
++MODULE_DESCRIPTION("Telechips PCIe controller driver");
++MODULE_LICENSE("GPL v2");
++
+diff --git a/drivers/pci/controller/dwc/dolphin/pci-dolphin.h b/drivers/pci/controller/dwc/dolphin/pci-dolphin.h
+new file mode 100644
+index 000000000000..92a844ad6477
+--- /dev/null
++++ b/drivers/pci/controller/dwc/dolphin/pci-dolphin.h
+@@ -0,0 +1,155 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright (C) Telechips Inc.
++ */
++
++#ifndef PCI_DOLPHIN_H
++#define PCI_DOLPHIN_H
++
++/*
++ * PCIe controller wrapper link configuration registers
++ */
++#define PCIE_LINK_CFG00			(0x000U)
++#define PCIE_LINK_CFG01			(0x004U)
++#define PCIE_LINK_CFG02			(0x008U)
++#define PCIE_LINK_CFG03			(0x00CU)
++#define PCIE_LINK_CFG04			(0x010U)
++#define PCIE_LINK_CFG07			(0x01CU)
++#define PCIE_LINK_CFG08			(0x020U)
++#define PCIE_LINK_CFG24			(0x060U)
++#define PCIE_LINK_CFG25			(0x064U)
++#define PCIE_LINK_CFG26			(0x068U)
++#define PCIE_LINK_CFG30			(0x078U)
++#define PCIE_LINK_CFG31			(0x07CU)
++#define PCIE_LINK_CFG33			(0x084U)
++#define PCIE_LINK_CFG44			(0x0B0U)
++#define PCIE_LINK_CFG53			(0x0D4U)
++#define PCIE_LINK_CFG57			(0x0E4U)
++#define PCIE_LINK_CFG88			(0x160U)
++#define PCIE_LINK_CFG89			(0x164U)
++#define PCIE_LINK_CFG91			(0x16CU)
++
++/*
++ * PCIe controller wrapper DBI configuration registers
++ */
++#define PCIE_DBI2_OFFSET		(0x100000U)
++#define DBI_PCIE_CAP_OFFSET		(0x70U)
++#define DBI_PCIE_CAP_LINK_CONTROL		(DBI_PCIE_CAP_OFFSET + 0x10U)
++#define DBI_PCIE_CAP_LINK_CONTROL2		(DBI_PCIE_CAP_OFFSET + 0x30U)
++#define DBI_PCIE_PORT_LOGIC_OFFSET		(0x700U)
++#define DBI_PCIE_PORT_LOGIC_GEN2_CTRL		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x10CU)
++#define DBI_PCIE_PORT_LOGIC_GEN3_RELATED		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x190U)
++#define DBI_PCIE_PORT_LOGIC_GEN3_EQ_CONTROL_OFF		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x1A8U)
++#define DBI_PCIE_PORT_LOGIC_GEN3_EQ_FB_MODE_DIR_CHANGE_OFF		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x1ACU)
++#define DBI_PCIE_PORT_LOGIC_PORT_LINK_CTRL		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x10U)
++#define DBI_PCIE_PORT_LOGIC_PIPE_LOOPBACK_CONTROL		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x1B8U)
++#define DBI_PCIE_PORT_LOGIC_MISC_CONTROL1		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x1BCU)
++#define DBI_PCIE_PORT_LOGIC_AMBA_ORDERING_CTRL		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x1D8U)
++#define DBI_PCIE_PORT_LOGIC_GEN4_LANE_MARGINING2		(DBI_PCIE_PORT_LOGIC_OFFSET + 0x480U)
++
++/*
++ * Mask/shift bits in PCIe related registers
++ */
++#define PCIE_LINK_CFG_VEN_MSG_GRANT_SHIFT (28U)
++#define PCIE_LINK_CFG_VEN_MSG_FMT_SHIFT (26U)
++#define PCIE_LINK_CFG_VEN_MSG_TYPE_SHIFT (21U)
++#define PCIE_LINK_CFG_VEN_MSG_LEN_SHIFT (6U)
++#define PCIE_LINK_CFG_VEN_MSG_REQ_SHIFT (0U)
++#define PCIE_LINK_CFG_VEN_MSG_GRANT_MASK ((u32)0x1U << PCIE_LINK_CFG_VEN_MSG_GRANT_SHIFT)
++#define PCIE_LINK_CFG_VEN_MSG_FMT_MASK ((u32)0x3U << PCIE_LINK_CFG_VEN_MSG_FMT_SHIFT)
++#define PCIE_LINK_CFG_VEN_MSG_TYPE_MASK ((u32)0x1FU << PCIE_LINK_CFG_VEN_MSG_TYPE_SHIFT)
++#define PCIE_LINK_CFG_VEN_MSG_LEN_MASK ((u32)0x3FFU << PCIE_LINK_CFG_VEN_MSG_LEN_SHIFT)
++#define PCIE_LINK_CFG_VEN_MSG_REQ_MASK ((u32)0x1U << PCIE_LINK_CFG_VEN_MSG_REQ_SHIFT)
++
++#define PCIE_LINK_CFG_VEN_MSG_TYPE(x)		((0x10U | ((u32)x)) << PCIE_LINK_CFG_VEN_MSG_TYPE_SHIFT)
++
++#define PCIE_LINK_CFG_VEN_MSG_CODE_SHIFT (0U)
++#define PCIE_LINK_CFG_VEN_MSG_CODE_MASK ((u32)0xFFU << PCIE_LINK_CFG_VEN_MSG_CODE_SHIFT)
++
++#define PCIE_LINK_CFG_VDM_DATA_SHIFT (0U)
++#define PCIE_LINK_CFG_VDM_DATA_MASK ((u32)0xFFFFFFFFU << PCIE_LINK_CFG_VDM_DATA_SHIFT)
++
++#define PCIE_LINK_CFG_VENDOR_ID_SHIFT (16U)
++#define PCIE_LINK_CFG_VENDOR_ID_MASK ((u32)0xFFFFU << PCIE_LINK_CFG_VENDOR_ID_SHIFT)
++
++#define PCIE_LINK_CFG_RADM_VENDOR_MSG_SHIFT (3U)
++#define PCIE_LINK_CFG_RADM_VENDOR_MSG_MASK ((u32)0x1U << PCIE_LINK_CFG_RADM_VENDOR_MSG_SHIFT)
++
++#define PCIE_LINK_CFG_RDLH_LINK_UP_SHIFT		(22U)
++#define PCIE_LINK_CFG_RDLH_LINK_UP_MASK		((u32)0x1U << PCIE_LINK_CFG_RDLH_LINK_UP_SHIFT)
++
++#define PCIE_LINK_CFG_SMLH_LINK_UP_SHIFT		(17U)
++#define PCIE_LINK_CFG_SMLH_LINK_UP_MASK		((u32)0x1U << PCIE_LINK_CFG_SMLH_LINK_UP_SHIFT)
++
++#define PCIE_LINK_CFG_LTSSM_ENABLE_SHIFT		(2U)
++#define PCIE_LINK_CFG_LTSSM_ENABLE_MASK		((u32)0x1U << PCIE_LINK_CFG_LTSSM_ENABLE_SHIFT)
++
++#define PCIE_LINK_CFG_DEVICE_TYPE_SHIFT		(6U)
++#define PCIE_LINK_CFG_DEVICE_TYPE_MASK		((u32)0xFU << PCIE_LINK_CFG_DEVICE_TYPE_SHIFT)
++
++#define PCIE_LINK_CFG_SLV_ADDR_MASK		(0xFFFFFFFFU)
++#define PCIE_LINK_CFG_INDIRECT_ADDR_MASK		(0x200000U)
++
++#if defined(CONFIG_ARCH_TCC803X)
++#define PCIE_LINK_CFG_MSI_INT_MASK		(0xBF3F00A0U)
++#define PCIE_LINK_CFG_INTX_MASK		(0x4040FFDEU)
++#define PCIE_LINK_CFG_INTR_EN_MASK		(0xFFFFD080U)
++#else
++#define PCIE_LINK_CFG_MSI_INT_MASK		(0x60040021U)
++#define PCIE_LINK_CFG_INTX_MASK		(0x0FF8FF82U)
++#define PCIE_LINK_CFG_INTR_EN_MASK		(0xFFFFFFFDU)
++#endif
++
++#define PCIE_LINK_CFG_REFCLK_EXT_EN_SHIFT		(8U)
++#define PCIE_LINK_CFG_PHY_REFCLK_SEL_SHIFT		(6U)
++#define PCIE_LINK_CFG_REFCLK_EXT_EN_MASK		((u32)0x1U << PCIE_LINK_CFG_REFCLK_EXT_EN_SHIFT)
++#define PCIE_LINK_CFG_PHY_REFCLK_SEL_MASK		((u32)0x3U << PCIE_LINK_CFG_PHY_REFCLK_SEL_SHIFT)
++
++#define PCIE_LINK_CFG_POWER_UP_RST_SHIFT		(6U)
++#define PCIE_LINK_CFG_POWER_UP_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_POWER_UP_RST_SHIFT)
++
++#define PCIE_LINK_CFG_SYS_INT_SHIFT		(0U)
++#define PCIE_LINK_CFG_SYS_INT_MASK		((u32)0x1U << PCIE_LINK_CFG_SYS_INT_SHIFT)
++
++#define PCIE_CAP_LINK_SPEED_SHIFT		(16U)
++#define PCIE_CAP_LINK_SPEED_MASK		((u32)0xFU << PCIE_CAP_LINK_SPEED_SHIFT)
++
++#define PCIE_DBI_TARGET_LINK_SPEED_SHIFT		(0U)
++#define PCIE_DBI_TARGET_LINK_SPEED_MASK		((u32)0xFU << PCIE_DBI_TARGET_LINK_SPEED_SHIFT)
++
++#define PCIE_DBI_DIRECT_SPEED_CHANGE_SHIFT		(17U)
++#define PCIE_DBI_DIRECT_SPEED_CHANGE_MASK		((u32)0x1U << PCIE_DBI_DIRECT_SPEED_CHANGE_SHIFT)
++
++#define PCIE_DBI_EQ_REDO_DISABLE_SHIFT		(11U)
++#define PCIE_DBI_EQ_REDO_DISABLE_MASK		((u32)0x1U << PCIE_DBI_EQ_REDO_DISABLE_SHIFT)
++
++#define PCIE_DBI_LOOPBACK_ENABLE_SHIFT		(2U)
++#define PCIE_DBI_LOOPBACK_ENABLE_MASK		((u32)0x1U << PCIE_DBI_LOOPBACK_ENABLE_SHIFT)
++
++#define PCIE_DBI_PIPE_LOOPBACK_SHIFT		(31U)
++#define PCIE_DBI_PIPE_LOOPBACK_MASK		((u32)0x1U << PCIE_DBI_PIPE_LOOPBACK_SHIFT)
++
++#define PCIE_DBI_GEN3_EQUALIZATION_DISABLE_SHIFT (16U)
++#define PCIE_DBI_GEN3_EQUALIZATION_DISABLE_MASK ((u32)0x1U << PCIE_DBI_GEN3_EQUALIZATION_DISABLE_SHIFT)
++
++#define PCIE_LINK_UP_TIMEOUT		(1000LL)
++#define PCIE_LINK_UP_DELAY		(1U)
++#define PCIE_VDM_GRANT_TIMEOUT		(1000LL)
++#define PCIE_VDM_GRANT_DELAY		(1U)
++#define PCIE_REG_BACKUP_SIZE			(0x90U)
++
++#define GEN3_EQ_PSET_REQ_VEC_SHIFT		(8U)
++#define GEN3_EQ_PSET_REQ_VEC_MASK		((u32)0xFFFFU << GEN3_EQ_PSET_REQ_VEC_SHIFT)
++
++#define AX_MSTR_ORDR_P_EVENT_SEL_SHIFT		(3)
++#define AX_MSTR_ORDR_P_EVENT_SEL_MASK		((u32)0x3U << AX_MSTR_ORDR_P_EVENT_SEL_SHIFT)
++
++#define GEN4_RXMARGIN_MAX_VOLTAGE_OFFSET_SHIFT		(24U)
++#define GEN4_RXMARGIN_NUM_VOLTAGE_STEPS_SHIFT		(16U)
++#define GEN4_RXMARGIN_MAX_TIMING_OFFSET_SHIFT		(8U)
++#define GEN4_RXMARGIN_NUM_TIMING_STEPS_SHIFT		(0U)
++#define GEN4_RXMARGIN_MAX_VOLTAGE_OFFSET_MASK		((u32)0x3FU << GEN4_RXMARGIN_MAX_VOLTAGE_OFFSET_SHIFT)
++#define GEN4_RXMARGIN_NUM_VOLTAGE_STEPS_MASK		((u32)0x7FU << GEN4_RXMARGIN_NUM_VOLTAGE_STEPS_SHIFT)
++#define GEN4_RXMARGIN_MAX_TIMING_OFFSET_MASK		((u32)0x3FU << GEN4_RXMARGIN_MAX_TIMING_OFFSET_SHIFT)
++#define GEN4_RXMARGIN_NUM_TIMING_STEPS_MASK		((u32)0x3FU << GEN4_RXMARGIN_NUM_TIMING_STEPS_SHIFT)
++#endif		/* PCI_DOLPHIN_H */
+diff --git a/drivers/phy/Kconfig b/drivers/phy/Kconfig
+index 0263db2ac874..bf1b9dfe5a34 100644
+--- a/drivers/phy/Kconfig
++++ b/drivers/phy/Kconfig
+@@ -69,5 +69,6 @@ source "drivers/phy/socionext/Kconfig"
+ source "drivers/phy/st/Kconfig"
+ source "drivers/phy/tegra/Kconfig"
+ source "drivers/phy/ti/Kconfig"
++source "drivers/phy/telechips/Kconfig"
+ 
+ endmenu
+diff --git a/drivers/phy/telechips/Kconfig b/drivers/phy/telechips/Kconfig
+new file mode 100644
+index 000000000000..12bc1facfd2b
+--- /dev/null
++++ b/drivers/phy/telechips/Kconfig
+@@ -0,0 +1,26 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Copyright (C) 2023 Telechips Inc.
++#
++
++config PHY_SEC_LN08LPP_PCIE
++	tristate "Telechips Dolphin5 PCIe PHY Driver"
++	depends on ARCH_TCC807X || COMPILE_TEST
++	select GENERIC_PHY
++	help
++	  Enable this to support the PCIe PHY on Dolphin5 SoCs.
++
++config PHY_SS_LN14LPP_PCIE
++	tristate "Telechips Dolphin3 PCIe PHY Driver"
++	depends on (ARCH_TCC805X || ARCH_TCC750X) || COMPILE_TEST
++	select GENERIC_PHY
++	help
++	  Enable this to support the PCIe PHY on Dolphin SoCs.
++
++config PHY_SEC_LN14LPP_PCIE
++	tristate "Telechips Dolphin3s PCIe PHY Driver"
++	depends on ARCH_TCC803X
++	select GENERIC_PHY
++	help
++	  Enable this to support the PCIe PHY on Dolphin SoCs.
++
+diff --git a/drivers/phy/telechips/Makefile b/drivers/phy/telechips/Makefile
+new file mode 100644
+index 000000000000..5f96674a4b89
+--- /dev/null
++++ b/drivers/phy/telechips/Makefile
+@@ -0,0 +1,8 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Copyright (C) 2023 Telechips Inc.
++#
++
++obj-$(CONFIG_PHY_SEC_LN08LPP_PCIE)		+= phy-sec08lpp-pcie.o
++obj-$(CONFIG_PHY_SEC_LN14LPP_PCIE)		+= phy-sec14lpp-pcie.o
++obj-$(CONFIG_PHY_SS_LN14LPP_PCIE)		+= phy-ss14lpp-pcie.o
+diff --git a/drivers/phy/telechips/phy-sec08lpp-pcie.c b/drivers/phy/telechips/phy-sec08lpp-pcie.c
+new file mode 100644
+index 000000000000..53edfda3ee07
+--- /dev/null
++++ b/drivers/phy/telechips/phy-sec08lpp-pcie.c
+@@ -0,0 +1,1042 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright (C) Telechips Inc.
++ */
++
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/of.h>
++#include <linux/io.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/pm_runtime.h>
++#include <linux/delay.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++
++/*
++ * PCIe controller wrapper pma configuration registers
++ */
++#define PCIE_PMA_CMN_REG00B		(0x002CU)
++#define PCIE_PMA_CMN_REG016		(0x0058U)
++#define PCIE_PMA_CMN_REG024		(0x0090U)
++#define PCIE_PMA_CMN_REG025		(0x0094U)
++#define PCIE_PMA_CMN_REG10A		(0x0428U)
++#define PCIE_PMA_CMN_REG130		(0x04C0U)
++#define PCIE_PMA_CMN_REG13C		(0x04F0U)
++#define PCIE_PMA_CMN_REG153		(0x054CU)
++#define PCIE_PMA_CMN_REG17B		(0x05ECU)
++#define PCIE_PMA_TRSV_REG40B		(0x102CU)
++#define PCIE_PMA_TRSV_REG424		(0x1090U)
++#define PCIE_PMA_TRSV_REG47A		(0x11E8U)
++#define PCIE_PMA_TRSV_REG47B		(0x11ECU)
++#define PCIE_PMA_TRSV_REG47C		(0x11F0U)
++#define PCIE_PMA_TRSV_REG4CF		(0x133CU)
++#define PCIE_PMA_TRSV_REG516		(0x1458U)
++#define PCIE_PMA_TRSV_REG517		(0x145CU)
++#define PCIE_PMA_TRSV_REG518		(0x1460U)
++#define PCIE_PMA_TRSV_REG519		(0x1464U)
++#define PCIE_PMA_TRSV_REG56D		(0x15B4U)
++#define PCIE_PMA_TRSV_REG5F1		(0x17C4U)
++#define PCIE_PMA_TRSV_REG5FD		(0x17F4U)
++
++/*
++ * PCIe controller wrapper pcs configuration registers
++ */
++#define PCIE_PCS_OUT_VEC_4		(0x0154U)
++
++/*
++ * PCIe controller wrapper phy configuration registers
++ */
++#define PCIE_PHY_REG00			(0x00U)
++#define PCIE_PHY_REG01			(0x04U)
++#define PCIE_PHY_REG04			(0x10U)
++
++/*
++ * PCIe controller wrapper clock configuration registers
++ */
++#define PCIE_CLK_CFG00			(0x000U)
++#define PCIE_CLK_CFG04			(0x010U)
++#define PCIE_CLK_CFG06			(0x018U)
++#define PCIE_CLK_CFG07			(0x01CU)
++#define PCIE_CLK_CFG08			(0x020U)
++
++/*
++ * Mask/shift bits in PCIe related registers
++ */
++#define PCIE_CLK_CFG_RESERVED_CON_SHIFT		(13U)
++#define PCIE_CLK_CFG_RESERVED_CON_MASK		((u32)0xFFFFU << PCIE_CLK_CFG_RESERVED_CON_SHIFT)
++
++#define PCIE_CLK_CFG_BGR_EN_SHIFT		(30U)
++#define PCIE_CLK_CFG_BGR_EN_MASK		((u32)0x1U << PCIE_CLK_CFG_BGR_EN_SHIFT)
++
++#define PCIE_CLK_CFG_PLL_LOCK_SHIFT		(7U)
++#define PCIE_CLK_CFG_PLL_LOCK_MASK		((u32)0x1U << PCIE_CLK_CFG_PLL_LOCK_SHIFT)
++
++#define PCIE_CLK_CFG_RESETB_SHIFT		(31U)
++#define PCIE_CLK_CFG_RMRES_CTRL_SHIFT		(29U)
++#define PCIE_CLK_CFG_VBG_SEL_SHIFT		(20U)
++#define PCIE_CLK_CFG_PDIV3_SEL_SHIFT		(19U)
++#define PCIE_CLK_CFG_S_SHIFT		(16U)
++#define PCIE_CLK_CFG_M_SHIFT		(6U)
++#define PCIE_CLK_CFG_P_SHIFT		(0U)
++#define PCIE_CLK_CFG_RESETB_MASK		((u32)0x1U << PCIE_CLK_CFG_RESETB_SHIFT)
++#define PCIE_CLK_CFG_RMRES_CTRL_MASK		((u32)0x3U << PCIE_CLK_CFG_RMRES_CTRL_SHIFT)
++#define PCIE_CLK_CFG_VBG_SEL_MASK		((u32)0x3U << PCIE_CLK_CFG_VBG_SEL_SHIFT)
++#define PCIE_CLK_CFG_PDIV3_SEL_MASK		((u32)0x1U << PCIE_CLK_CFG_PDIV3_SEL_SHIFT)
++#define PCIE_CLK_CFG_S_MASK		((u32)0x7U << PCIE_CLK_CFG_S_SHIFT)
++#define PCIE_CLK_CFG_M_MASK		((u32)0x3FFU << PCIE_CLK_CFG_M_SHIFT)
++#define PCIE_CLK_CFG_P_MASK		((u32)0x3FU << PCIE_CLK_CFG_P_SHIFT)
++#define PCIE_CLK_CFG_PLL_CTRL_MASK		(PCIE_CLK_CFG_P_MASK | \
++		PCIE_CLK_CFG_M_MASK | \
++		PCIE_CLK_CFG_S_MASK | \
++		PCIE_CLK_CFG_PDIV3_SEL_MASK | \
++		PCIE_CLK_CFG_VBG_SEL_MASK | \
++		PCIE_CLK_CFG_RMRES_CTRL_MASK)
++
++#define PCIE_CLK_CFG_ERIO_EN_SHIFT		(18U)
++#define PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_SHIFT		(5U)
++#define PCIE_CLK_CFG_ERIO_USE_LOCK_DONE_SHIFT		(4U)
++#define PCIE_CLK_CFG_ERIO_ISO_ENB_SHIFT		(0U)
++#define PCIE_CLK_CFG_ERIO_EN_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_EN_SHIFT)
++#define PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_SHIFT)
++#define PCIE_CLK_CFG_ERIO_USE_LOCK_DONE_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_USE_LOCK_DONE_SHIFT)
++#define PCIE_CLK_CFG_ERIO_ISO_ENB_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_ISO_ENB_SHIFT)
++
++#define PCIE_PHY_REG_PCS_RSTN_SHIFT		(3U)
++#define PCIE_PHY_REG_PMA_PORT0_RSTN_SHIFT		(2U)
++#define PCIE_PHY_REG_PMA_CMN_RSTN_SHIFT		(1U)
++#define PCIE_PHY_REG_PMA_INIT_RSTN_SHIFT		(0U)
++#define PCIE_PHY_REG_PCS_RSTN_MASK		((u32)0x1U << PCIE_PHY_REG_PCS_RSTN_SHIFT)
++#define PCIE_PHY_REG_PMA_PORT0_RSTN_MASK		((u32)0x1U << PCIE_PHY_REG_PMA_PORT0_RSTN_SHIFT)
++#define PCIE_PHY_REG_PMA_CMN_RSTN_MASK		((u32)0x1U << PCIE_PHY_REG_PMA_CMN_RSTN_SHIFT)
++#define PCIE_PHY_REG_PMA_INIT_RSTN_MASK		((u32)0x1U << PCIE_PHY_REG_PMA_INIT_RSTN_SHIFT)
++
++#define PCIE_PHY_REG_LPLL_REF_CLK_SEL_SHIFT		(3U)
++#define PCIE_PHY_REG_PORT0_REF_CLK_EN_SHIFT		(0U)
++#define PCIE_PHY_REG_LPLL_REF_CLK_SEL_MASK		((u32)0x3U << PCIE_PHY_REG_LPLL_REF_CLK_SEL_SHIFT)
++#define PCIE_PHY_REG_PORT0_REF_CLK_EN_MASK		((u32)0x1U << PCIE_PHY_REG_PORT0_REF_CLK_EN_SHIFT)
++
++#define PCIE_PHY_REG_PMA_POWER_OFF_SHIFT		(1U)
++#define PCIE_PHY_REG_PMA_POWER_OFF_MASK		((u32)0x1U << PCIE_PHY_REG_PMA_POWER_OFF_SHIFT)
++
++#define PCIE_PMA_ANA_LCPLL_SDM_DENOMINATOR_IC1234_G4_SHIFT		(0U)
++#define PCIE_PMA_ANA_LCPLL_SDM_DENOMINATOR_IC1234_G4_MASK		((u32)0xFFU << PCIE_PMA_ANA_LCPLL_SDM_DENOMINATOR_IC1234_G4_SHIFT)
++
++#define PCIE_PMA_IGNORE_ADAP_DONE_SHIFT		(0U)
++#define PCIE_PMA_IGNORE_ADAP_DONE_MASK		((u32)0x1U << PCIE_PMA_IGNORE_ADAP_DONE_SHIFT)
++
++#define PCIE_PMA_ANA_LCPLL_AFC_VCO_CNT_RUN_NUM_SHIFT		(3U)
++#define PCIE_PMA_ANA_LCPLL_AFC_VCO_CNT_RUN_NUM_MASK		((u32)0x1FU << PCIE_PMA_ANA_LCPLL_AFC_VCO_CNT_RUN_NUM_SHIFT)
++
++#define PCIE_PMA_ANA_LCPLL_AVC_MAN_CAP_BIAS_CODE_SHIFT		(3U)
++#define PCIE_PMA_ANA_LCPLL_AVC_MAN_CAP_BIAS_CODE_MASK		((u32)0x7U << PCIE_PMA_ANA_LCPLL_AVC_MAN_CAP_BIAS_CODE_SHIFT)
++
++#define PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G3_SHIFT		(0U)
++#define PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G3_MASK		((u32)0xFU << PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G3_SHIFT)
++
++#define PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G4_SHIFT		(4U)
++#define PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G4_MASK		((u32)0xFU << PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G4_SHIFT)
++
++#define PCIE_PMA_TG_LCPLL_FINE_LOCK_DELAY_TIME_SHIFT		(3U)
++#define PCIE_PMA_TG_LCPLL_FINE_LOCK_DELAY_TIME_MASK		((u32)0x7U << PCIE_PMA_TG_LCPLL_FINE_LOCK_DELAY_TIME_SHIFT)
++
++#define PCIE_PMA_PLL_LOCK_SHIFT		(2U)
++#define PCIE_PMA_PLL_LOCK_MASK		((u32)0x1U << PCIE_PMA_PLL_LOCK_SHIFT)
++
++#define PCIE_PMA_RX_MARGIN_SCALE_SHIFT		(2U)
++#define PCIE_PMA_RX_MARGIN_SCALE_MASK		((u32)0x3U << PCIE_PMA_RX_MARGIN_SCALE_SHIFT)
++
++#define PCIE_PMA_LANE_SEQ_AES_EN_SHIFT		(6U)
++#define PCIE_PMA_LANE_SEQ_AES_EN_MASK		((u32)0x1U << PCIE_PMA_LANE_SEQ_AES_EN_SHIFT)
++
++#define PCIE_PMA_LN0_OV_S_ANA_TX_DRV_IDRV_EN_SHIFT		(1U)
++#define PCIE_PMA_LN0_OV_S_ANA_TX_DRV_IDRV_EN_MASK		((u32)0x1U << PCIE_PMA_LN0_OV_S_ANA_TX_DRV_IDRV_EN_SHIFT)
++
++#define PCIE_PMA_LN0_ANA_TX_RESERVED_SHIFT		(0U)
++#define PCIE_PMA_LN0_ANA_TX_RESERVED_MASK		((u32)0xFFU << PCIE_PMA_LN0_ANA_TX_RESERVED_SHIFT)
++
++#define PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G3_SHIFT		(0U)
++#define PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G3_MASK		((u32)0xFFU << PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G3_SHIFT)
++
++#define PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G4_SHIFT		(0U)
++#define PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G4_MASK		((u32)0xFFU << PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G4_SHIFT)
++
++#define PCIE_PMA_LN0_ANA_RX_CDR_CCO_VCI_AMP_I_CTRL_SHIFT		(2U)
++#define PCIE_PMA_LN0_ANA_RX_CDR_CCO_VCI_AMP_I_CTRL_MASK		((u32)0x3U << PCIE_PMA_LN0_ANA_RX_CDR_CCO_VCI_AMP_I_CTRL_SHIFT)
++
++#define PCIE_PMA_LN0_BER_ADAP_RX_START_CURSOR_G4_SHIFT		(0U)
++#define PCIE_PMA_LN0_BER_ADAP_RX_START_CURSOR_G4_MASK		((u32)0x1FU << PCIE_PMA_LN0_BER_ADAP_RX_START_CURSOR_G4_SHIFT)
++
++#define PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G3_SHIFT		(0U)
++#define PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G3_MASK		((u32)0xFFU << PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G3_SHIFT)
++
++#define PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G3_SHIFT		(0U)
++#define PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G3_MASK		((u32)0xFFU << PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G3_SHIFT)
++
++#define PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G4_SHIFT		(0U)
++#define PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G4_MASK		((u32)0xFFU << PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G4_SHIFT)
++
++#define PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G4_SHIFT		(0U)
++#define PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G4_MASK		((u32)0xFFU << PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G4_SHIFT)
++
++#define PCIE_PMA_LN0_OV_I_PMAD_RX_CTLE_RS_MF_CTRL_G4_SHIFT		(0U)
++#define PCIE_PMA_LN0_OV_I_PMAD_RX_CTLE_RS_MF_CTRL_G4_MASK		((u32)0x1FU << PCIE_PMA_LN0_OV_I_PMAD_RX_CTLE_RS_MF_CTRL_G4_SHIFT)
++
++#define PCIE_PMA_LN0_ANA_RX_RESERVED__7_0_SHIFT		(0U)
++#define PCIE_PMA_LN0_ANA_RX_RESERVED__7_0_MASK		((u32)0xFFU << PCIE_PMA_LN0_ANA_RX_RESERVED__7_0_SHIFT)
++
++#define PCIE_PMA_LN0_OV_S_PI_OFFSET_QCLK_SHIFT		(5U)
++#define PCIE_PMA_LN0_OV_S_PI_OFFSET_QCLK_MASK		((u32)0x1U << PCIE_PMA_LN0_OV_S_PI_OFFSET_QCLK_SHIFT)
++
++#define PCIE_PCS_PMA_CONTROL_VECTOR_MASK		(0xFFFFFU)
++
++#define PCIE_CLK_CFG_PMS_PRESET		(0x201C8001U)
++#define PCIE_FBUS_CLK_RATE		(333333333UL)
++#define PCIE_PHY_CLK_RATE		(100000000UL)
++
++struct ber_preset {
++	s32 phase;
++	u32 offset;
++	u32 value;
++};
++
++static struct ber_preset ber_preset_table[] = {
++	/* Preset 0 */
++	{ 0, 0x5F8U, 0x00U, },
++	{ 0, 0x600U, 0x23U, },
++	{ 0, 0x604U, 0x44U, },
++	{ 0, 0x608U, 0x61U, },
++	{ 0, 0x60CU, 0x55U, },
++	{ 0, 0x610U, 0x14U, },
++	{ 0, 0x614U, 0x23U, },
++	{ 0, 0x618U, 0x1AU, },
++	{ 0, 0x61CU, 0x04U, },
++	{ 0, 0x5F8U, 0x04U, },
++	{ 0, 0x5F8U, 0x00U, },
++	/* Preset 1 */
++	{ 1, 0x5F8U, 0x08U, },
++	{ 1, 0x604U, 0x42U, },
++	{ 1, 0x5F8U, 0x0CU, },
++	{ 1, 0x5F8U, 0x08U, },
++	/* Preset 2 */
++	{ 2, 0x5F8U, 0x10U, },
++	{ 2, 0x604U, 0x40U, },
++	{ 2, 0x5F8U, 0x14U, },
++	{ 2, 0x5F8U, 0x10U, },
++	/* Preset 3 */
++	{ 3, 0x5F8U, 0x18U, },
++	{ 3, 0x604U, 0x45U, },
++	{ 3, 0x5F8U, 0x1CU, },
++	{ 3, 0x5F8U, 0x18U, },
++	/* Preset 4 */
++	{ 4, 0x5F8U, 0x20U, },
++	{ 4, 0x604U, 0x46U, },
++	{ 4, 0x5F8U, 0x24U, },
++	{ 4, 0x5F8U, 0x20U, },
++	/* Preset 5 */
++	{ 5, 0x5F8U, 0x28U, },
++	{ 5, 0x604U, 0x48U, },
++	{ 5, 0x5F8U, 0x2CU, },
++	{ 5, 0x5F8U, 0x28U, },
++	/* Preset 6 */
++	{ 6, 0x5F8U, 0x30U, },
++	{ 6, 0x604U, 0x4AU, },
++	{ 6, 0x5F8U, 0x34U, },
++	{ 6, 0x5F8U, 0x30U, },
++	/* Preset 7 */
++	{ 7, 0x5F8U, 0x38U, },
++	{ 7, 0x604U, 0x4CU, },
++	{ 7, 0x5F8U, 0x3CU, },
++	{ 7, 0x5F8U, 0x38U, },
++	/* Preset 8 */
++	{ 8, 0x5F8U, 0x40U, },
++	{ 8, 0x600U, 0x20U, },
++	{ 8, 0x604U, 0x20U, },
++	{ 8, 0x608U, 0x01U, },
++	{ 8, 0x5F8U, 0x44U, },
++	{ 8, 0x5F8U, 0x40U, },
++	/* Preset 9 */
++	{ 9, 0x5F8U, 0x48U, },
++	{ 9, 0x600U, 0x20U, },
++	{ 9, 0x604U, 0x21U, },
++	{ 9, 0x608U, 0x01U, },
++	{ 9, 0x5F8U, 0x4CU, },
++	{ 9, 0x5F8U, 0x48U, },
++	/* Preset A */
++	{ 10, 0x5F8U, 0x50U, },
++	{ 10, 0x600U, 0x26U, },
++	{ 10, 0x604U, 0x80U, },
++	{ 10, 0x608U, 0x41U, },
++	{ 10, 0x60CU, 0xAFU, },
++	{ 10, 0x610U, 0x26U, },
++	{ 10, 0x614U, 0x34U, },
++	{ 10, 0x618U, 0x24U, },
++	{ 10, 0x61CU, 0x06U, },
++	{ 10, 0x5F8U, 0x54U, },
++	{ 10, 0x5F8U, 0x50U, },
++	/* Preset B */
++	{ 11, 0x5F8U, 0x58U, },
++	{ 11, 0x604U, 0x81U, },
++	{ 11, 0x5F8U, 0x5CU, },
++	{ 11, 0x5F8U, 0x58U, },
++	/* Preset C */
++	{ 12, 0x5F8U, 0x60U, },
++	{ 12, 0x604U, 0x82U, },
++	{ 12, 0x5F8U, 0x64U, },
++	{ 12, 0x5F8U, 0x60U, },
++	/* Preset D */
++	{ 13, 0x5F8U, 0x68U, },
++	{ 13, 0x604U, 0x83U, },
++	{ 13, 0x5F8U, 0x6CU, },
++	{ 13, 0x5F8U, 0x68U, },
++	/* Preset E */
++	{ 14, 0x5F8U, 0x70U, },
++	{ 14, 0x604U, 0x84U, },
++	{ 14, 0x5F8U, 0x74U, },
++	{ 14, 0x5F8U, 0x70U, },
++	/* Preset F */
++	{ 15, 0x5F8U, 0x78U, },
++	{ 15, 0x600U, 0x26U, },
++	{ 15, 0x604U, 0x85U, },
++	{ 15, 0x608U, 0x80U, },
++	{ 15, 0x60CU, 0x7FU, },
++	{ 15, 0x610U, 0x2DU, },
++	{ 15, 0x614U, 0x34U, },
++	{ 15, 0x618U, 0x24U, },
++	{ 15, 0x61CU, 0x05U, },
++	{ 15, 0x5F8U, 0x7CU, },
++	{ 15, 0x5F8U, 0x78U, },
++	/* Preset 10 */
++	{ 16, 0x5F8U, 0x80U, },
++	{ 16, 0x604U, 0x86U, },
++	{ 16, 0x5F8U, 0x84U, },
++	{ 16, 0x5F8U, 0x80U, },
++	/* Preset 11 */
++	{ 17, 0x5F8U, 0x88U, },
++	{ 17, 0x604U, 0x87U, },
++	{ 17, 0x5F8U, 0x8CU, },
++	{ 17, 0x5F8U, 0x88U, },
++	/* Preset 12 */
++	{ 18, 0x5F8U, 0x90U, },
++	{ 18, 0x604U, 0x88U, },
++	{ 18, 0x5F8U, 0x94U, },
++	{ 18, 0x5F8U, 0x90U, },
++	/* Preset 13 */
++	{ 19, 0x5F8U, 0x98U, },
++	{ 19, 0x604U, 0x89U, },
++	{ 19, 0x5F8U, 0x9CU, },
++	{ 19, 0x5F8U, 0x98U, },
++};
++
++struct sec08lpp_pcie_phy {
++	struct device *dev;
++	struct clk *phy_clk;
++	struct clk *fbus_clk;
++	void __iomem *phy_base;
++	void __iomem *clk_base;
++	void __iomem *pma_base;
++	void __iomem *pcs_base;
++	u32 mode;
++};
++
++static inline u32 sec08lpp_pcie_phy_readl(const void __iomem *base, u32 offset)
++{
++	u32 ret = 0x0U;
++
++	if (base != NULL) {
++		ret = ioread32(base + offset);
++	}
++
++	return ret;
++}
++
++static inline void sec08lpp_pcie_phy_writel(void __iomem *base, u32 offset, u32 val, u32 mask)
++{
++	if (base != NULL) {
++		iowrite32((ioread32(base + offset) & ~mask)|val,
++				base + offset);
++	}
++}
++
++static s32 sec08lpp_pcie_phy_reset(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++		u32 val, mask;
++
++		/* assert tx and rx resets */
++		val = 0x0U;
++		mask = PCIE_PHY_REG_PCS_RSTN_MASK;
++		sec08lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG00, val, mask);
++
++		udelay(1);
++
++		/* deassert tx, rx and global reset */
++		mask = PCIE_PHY_REG_PCS_RSTN_MASK | PCIE_PHY_REG_PMA_INIT_RSTN_MASK;
++		val = mask;
++		sec08lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG00, val, mask);
++
++		udelay(1);
++
++		/* deassert port and common blk resets */
++		mask = PCIE_PHY_REG_PMA_CMN_RSTN_MASK | PCIE_PHY_REG_PMA_PORT0_RSTN_MASK;
++		val = mask;
++		sec08lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG00, val, mask);
++
++		udelay(500); //need to find proper delay
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_enable_clk(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		err = clk_prepare_enable(priv->fbus_clk);
++		if (err == 0) {
++			err = clk_prepare_enable(priv->phy_clk);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_disable_clk(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		clk_disable_unprepare(priv->phy_clk);
++		clk_disable_unprepare(priv->fbus_clk);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_pma_pll_lock(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		mask = PCIE_CLK_CFG_PLL_LOCK_MASK;
++		val = sec08lpp_pcie_phy_readl(priv->clk_base, PCIE_CLK_CFG08) & mask;
++		if (val == mask) {
++			mask = PCIE_PMA_PLL_LOCK_MASK;
++			while ((sec08lpp_pcie_phy_readl(priv->pma_base, PCIE_PMA_CMN_REG13C) & mask) != mask) {
++				mdelay(10);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_disable_clkout(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		val = 0x0U;
++		mask = PCIE_CLK_CFG_RESETB_MASK;
++		sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_set_clk(const struct sec08lpp_pcie_phy *priv, u32 mode)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		err = sec08lpp_pcie_phy_enable_clk(priv);
++		if (err == 0) {
++			u32 val, mask;
++
++			if ((mode & 0xF0U) == 0x0U) {
++				/* RESERVED_CON b[20] */
++				mask = (u32)BIT(20);
++				val = 0x0U;
++				sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG07, val, mask);
++
++				mask = PCIE_CLK_CFG_RESETB_MASK;
++				val = 0x0U;
++				sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++				udelay(10);
++
++				/*
++				 * Skip PLL P,M,S settings
++				 */
++
++				mask = PCIE_CLK_CFG_BGR_EN_MASK;
++				val = mask;
++				sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG06, val, mask);
++				udelay(100);
++
++				mask = PCIE_CLK_CFG_RESETB_MASK;
++				val = mask;
++				sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++
++				mask = PCIE_CLK_CFG_PLL_LOCK_MASK;
++				do {
++					val = sec08lpp_pcie_phy_readl(priv->clk_base, PCIE_CLK_CFG08) & mask;
++				} while (val == 0x0U);
++
++				mask = PCIE_CLK_CFG_ERIO_ISO_ENB_MASK |
++					PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_MASK |
++					PCIE_CLK_CFG_ERIO_USE_LOCK_DONE_MASK |
++					PCIE_CLK_CFG_ERIO_EN_MASK;
++				val = mask;
++				sec08lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG04, val, mask);
++
++				mdelay(15);
++			} else {
++				mask = PCIE_PHY_REG_LPLL_REF_CLK_SEL_MASK |
++					PCIE_PHY_REG_PORT0_REF_CLK_EN_MASK;
++				val = sec08lpp_pcie_phy_readl(priv->phy_base, PCIE_PHY_REG01) & ~mask;
++				val |= ((u32)0x1U << PCIE_PHY_REG_PORT0_REF_CLK_EN_SHIFT);
++				val |= (((mode & 0xF0U) >> 4U)  << PCIE_PHY_REG_LPLL_REF_CLK_SEL_SHIFT);
++				sec08lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG01, val, mask);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_set_mode(struct phy *phy, enum phy_mode mode, s32 submode)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		struct sec08lpp_pcie_phy *priv = (struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		if ((mode != PHY_MODE_PCIE) || (submode < 0)) {
++			err = -EINVAL;
++		} else {
++			u8 clk_mode;
++
++			if (!__builtin_add_overflow(submode, 0, &clk_mode)) {
++				err = sec08lpp_pcie_phy_set_clk((const struct sec08lpp_pcie_phy *)priv, (u32)clk_mode);
++				if (err == 0) {
++					err = sec08lpp_pcie_phy_pma_pll_lock((const struct sec08lpp_pcie_phy *)priv);
++				}
++
++				if (err == 0) {
++					priv->mode = (u32)clk_mode;
++				}
++			}
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_pwr_down(const struct sec08lpp_pcie_phy *priv, bool enable)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		mask = PCIE_PHY_REG_PMA_POWER_OFF_MASK;
++		val = enable ? mask : 0x0U;
++		sec08lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG04, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_power_on(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = sec08lpp_pcie_phy_pwr_down(priv, false);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_power_off(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = sec08lpp_pcie_phy_pwr_down(priv, true);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_revert_to_default(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		mask = PCIE_PMA_LANE_SEQ_AES_EN_MASK;
++		val = 0x0U;
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG17B, val, mask);
++
++		mask = PCIE_PMA_LN0_OV_S_ANA_TX_DRV_IDRV_EN_MASK;
++		val = mask;
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_TRSV_REG40B, val, mask);
++
++		mask = PCIE_PMA_LN0_OV_S_PI_OFFSET_QCLK_MASK;
++		val = 0x0U;
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_TRSV_REG5FD, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_sfr_init(const struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask, idx;
++
++		mask = PCIE_PMA_ANA_LCPLL_AFC_VCO_CNT_RUN_NUM_MASK;
++		val = ((u32)0x11U << PCIE_PMA_ANA_LCPLL_AFC_VCO_CNT_RUN_NUM_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG00B, val, mask);
++
++		mask = PCIE_PMA_ANA_LCPLL_AVC_MAN_CAP_BIAS_CODE_MASK;
++		val = ((u32)0x3U << PCIE_PMA_ANA_LCPLL_AVC_MAN_CAP_BIAS_CODE_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG016, val, mask);
++
++		mask = PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G3_MASK;
++		val = ((u32)0x6U << PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G3_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG024, val, mask);
++
++		mask = PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G4_MASK;
++		val = ((u32)0x6U << PCIE_PMA_ANA_LCPLL_ANA_LPF_R_SEL_LC1234_G4_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG025, val, mask);
++
++		mask = PCIE_PMA_TG_LCPLL_FINE_LOCK_DELAY_TIME_MASK;
++		val = ((u32)0x7U << PCIE_PMA_TG_LCPLL_FINE_LOCK_DELAY_TIME_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG10A, val, mask);
++
++		mask = PCIE_PMA_RX_MARGIN_SCALE_MASK;
++		val = ((u32)0x1U << PCIE_PMA_RX_MARGIN_SCALE_SHIFT);
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG153, val, mask);
++
++		mask = PCIE_PMA_LN0_ANA_TX_RESERVED_MASK;
++		val = ((u32)0x30U << PCIE_PMA_LN0_ANA_TX_RESERVED_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG424 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G3_MASK;
++		val = ((u32)0x2U << PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G3_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG47A + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G4_MASK;
++		val = ((u32)0x4U << PCIE_PMA_LN0_ANA_RX_SR_RESERVED_G4_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG47B + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_ANA_RX_CDR_CCO_VCI_AMP_I_CTRL_MASK;
++		val = ((u32)0x0U << PCIE_PMA_LN0_ANA_RX_CDR_CCO_VCI_AMP_I_CTRL_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG47C + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_BER_ADAP_RX_START_CURSOR_G4_MASK;
++		val = ((u32)0xCU << PCIE_PMA_LN0_BER_ADAP_RX_START_CURSOR_G4_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG4CF + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G3_MASK;
++		val = ((u32)0xE5U << PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G3_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG516 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G3_MASK;
++		val = ((u32)0xB6U << PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G3_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG517 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G4_MASK;
++		val = ((u32)0xF5U << PCIE_PMA_LN0_RX_EQ_PH_0_1_TIMEOUT_G4_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG518 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G4_MASK;
++		val = ((u32)0xC4U << PCIE_PMA_LN0_RX_EQ_PH_2_3_TIMEOUT_G4_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG519 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_OV_I_PMAD_RX_CTLE_RS_MF_CTRL_G4_MASK;
++		val = ((u32)0x6U << PCIE_PMA_LN0_OV_I_PMAD_RX_CTLE_RS_MF_CTRL_G4_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG56D + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = PCIE_PMA_LN0_ANA_RX_RESERVED__7_0_MASK;
++		val = ((u32)0x33U << PCIE_PMA_LN0_ANA_RX_RESERVED__7_0_SHIFT);
++		for (idx = 0U; idx < 4U; idx++) {
++			sec08lpp_pcie_phy_writel(priv->pma_base,
++					PCIE_PMA_TRSV_REG5F1 + (idx * 0x1000U),
++					val,
++					mask);
++		}
++
++		mask = 0xFFFFFFFFU;
++		for (idx = 0U; idx < (sizeof(ber_preset_table)/sizeof(struct ber_preset)); idx++) {
++			if (ber_preset_table[idx].offset != mask) {
++				sec08lpp_pcie_phy_writel(priv->pma_base,
++						ber_preset_table[idx].offset,
++						ber_preset_table[idx].value,
++						mask);
++			}
++		}
++
++		val = ((u32)0x1U << PCIE_PMA_IGNORE_ADAP_DONE_SHIFT);
++		mask = PCIE_PMA_IGNORE_ADAP_DONE_MASK;
++		sec08lpp_pcie_phy_writel(priv->pma_base, PCIE_PMA_CMN_REG130, val, mask);
++
++		mask = PCIE_PCS_PMA_CONTROL_VECTOR_MASK;
++		if((priv->mode & (u32)BIT(1)) != 0x0U) {
++			val = 0x700D5U;
++		} else {
++			val = 0x700DDU;
++		}
++		sec08lpp_pcie_phy_writel(priv->pcs_base, PCIE_PCS_OUT_VEC_4, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_init(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = sec08lpp_pcie_phy_revert_to_default(priv);
++		if (err == 0) {
++			err = sec08lpp_pcie_phy_sfr_init(priv);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_exit(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct phy_ops sec08lpp_pcie_phy_ops = {
++	.init		= sec08lpp_pcie_phy_init,
++	.exit		= sec08lpp_pcie_phy_exit,
++	.power_on		= sec08lpp_pcie_phy_power_on,
++	.power_off		= sec08lpp_pcie_phy_power_off,
++	.reset		= sec08lpp_pcie_phy_reset,
++	.set_mode		= sec08lpp_pcie_phy_set_mode,
++	.owner		= THIS_MODULE,
++};
++
++static s32 sec08lpp_pcie_phy_suspend_late(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)dev_get_drvdata(dev);
++
++		err = sec08lpp_pcie_phy_disable_clk(priv);
++		if (err == 0) {
++			err = sec08lpp_pcie_phy_disable_clkout(priv);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct dev_pm_ops sec08lpp_pcie_phy_pm_ops = {
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(sec08lpp_pcie_phy_suspend_late,
++			NULL)
++};
++
++static const struct of_device_id sec08lpp_pcie_phy_id_table[] = {
++	{
++		.compatible = "samsung,ln08lpp-pcie-phy",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, sec08lpp_pcie_phy_id_table);
++
++static s32 sec08lpp_pcie_phy_of_parse_clk(struct platform_device *pdev, struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		priv->fbus_clk = devm_clk_get(&pdev->dev, "pcie_fbus");
++		if (IS_ERR(priv->fbus_clk)) {
++			err = (s32)PTR_ERR(priv->fbus_clk);
++		} else {
++			err = clk_set_rate(priv->fbus_clk, PCIE_FBUS_CLK_RATE);
++		}
++
++		if (err == 0) {
++			priv->phy_clk = devm_clk_get(&pdev->dev, "pcie_phy");
++			if (IS_ERR(priv->phy_clk)) {
++				err = (s32)PTR_ERR(priv->phy_clk);
++			} else {
++				err = clk_set_rate(priv->phy_clk, PCIE_PHY_CLK_RATE);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_of_parse_reg(struct platform_device *pdev, struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		struct resource *res;
++
++		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "phy");
++		if (res != NULL) {
++			priv->phy_base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++			if (IS_ERR(priv->phy_base)) {
++				err = (s32)PTR_ERR(priv->phy_base);
++			}
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "clk");
++			if (res != NULL) {
++				priv->clk_base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++				if (IS_ERR(priv->clk_base)) {
++					err = (s32)PTR_ERR(priv->clk_base);
++				}
++			}
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "pma");
++			if (res != NULL) {
++				priv->pma_base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++				if (IS_ERR(priv->pma_base)) {
++					err = (s32)PTR_ERR(priv->pma_base);
++				}
++			}
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "pcs");
++			if (res != NULL) {
++				priv->pcs_base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++				if (IS_ERR(priv->pcs_base)) {
++					err = (s32)PTR_ERR(priv->pcs_base);
++				}
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_of_parse_dt(struct platform_device *pdev, struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) &&
++			(priv != NULL)) {
++		err = sec08lpp_pcie_phy_of_parse_reg(pdev, priv);
++		if (err == 0) {
++			err = sec08lpp_pcie_phy_of_parse_clk(pdev, priv);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_register(struct sec08lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		struct phy_provider *provider;
++		struct phy *phy;
++
++		phy = devm_phy_create(priv->dev, NULL, &sec08lpp_pcie_phy_ops);
++		if (IS_ERR(phy)) {
++			err = PTR_ERR(phy);
++		} else {
++			phy_set_drvdata(phy, priv);
++			provider = devm_of_phy_provider_register(priv->dev,
++					of_phy_simple_xlate);
++			if (IS_ERR(provider)) {
++				err = PTR_ERR(provider);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_probe(struct platform_device *pdev)
++{
++	struct sec08lpp_pcie_phy *priv;
++	s32 err = 0;
++
++	priv = (struct sec08lpp_pcie_phy *)devm_kzalloc(&pdev->dev,
++			sizeof(struct sec08lpp_pcie_phy), GFP_KERNEL);
++	if (priv != NULL) {
++		err = sec08lpp_pcie_phy_of_parse_dt(pdev, priv);
++		if (err == 0) {
++			priv->dev = &pdev->dev;
++			platform_set_drvdata(pdev, priv);
++			err = sec08lpp_pcie_phy_register(priv);
++		}
++
++		if (err == 0) {
++			pm_runtime_enable(priv->dev);
++		}
++	} else {
++		err = -ENOMEM;
++	}
++
++	return err;
++}
++
++static s32 sec08lpp_pcie_phy_remove(struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if (pdev != NULL) {
++		const struct sec08lpp_pcie_phy *priv =
++			(const struct sec08lpp_pcie_phy *)platform_get_drvdata(pdev);
++
++		pm_runtime_disable(priv->dev);
++		err = sec08lpp_pcie_phy_disable_clk(priv);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static struct platform_driver sec08lpp_pcie_phy_driver = {
++	.probe		= sec08lpp_pcie_phy_probe,
++	.remove		= sec08lpp_pcie_phy_remove,
++	.driver		= {
++		.name	= "sec-ln08lpp-pcie-phy",
++		.pm	= &sec08lpp_pcie_phy_pm_ops,
++		.of_match_table = of_match_ptr(sec08lpp_pcie_phy_id_table),
++	},
++};
++module_platform_driver(sec08lpp_pcie_phy_driver);
++
++MODULE_DESCRIPTION("Telechips Dolphin5 PCIe PHY Driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/phy/telechips/phy-sec14lpp-pcie.c b/drivers/phy/telechips/phy-sec14lpp-pcie.c
+new file mode 100644
+index 000000000000..6ebaa8409aed
+--- /dev/null
++++ b/drivers/phy/telechips/phy-sec14lpp-pcie.c
+@@ -0,0 +1,554 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright (C) Telechips Inc.
++ */
++
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/of.h>
++#include <linux/io.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/pm_runtime.h>
++#include <linux/delay.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++
++/*
++ * PCIe controller wrapper link configuration registers
++ */
++#define PCIE_LINK_CFG08			(0x020U)
++#define PCIE_LINK_CFG43			(0x0ACU)
++#define PCIE_LINK_CFG44			(0x0B0U)
++
++/*
++ * PCIe controller wrapper phy configuration registers
++ */
++#define PCIE_PHY_CMN_REG062		(0x0188U)
++#define PCIE_PHY_CMN_REG064		(0x0190U)
++
++/*
++ * Mask/shift bits in PCIe related registers
++ */
++#define PCIE_LINK_CFG_RCVRY_IDLE_STATE_SHIFT		(16U)
++#define PCIE_LINK_CFG_PHY_POWER_OFF_SHIFT		(5U)
++#define PCIE_LINK_CFG_PHY_PLL_LOCKED_SHIFT		(1U)
++#define PCIE_LINK_CFG_PHY_CDR_LOCKED_SHIFT		(0U)
++#define PCIE_LINK_CFG_RCVRY_IDLE_STATE_MASK		((u32)0x1U << PCIE_LINK_CFG_RCVRY_IDLE_STATE_SHIFT)
++#define PCIE_LINK_CFG_PHY_POWER_OFF_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_POWER_OFF_SHIFT)
++#define PCIE_LINK_CFG_PHY_PLL_LOCKED_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_PLL_LOCKED_SHIFT)
++#define PCIE_LINK_CFG_PHY_CDR_LOCKED_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_CDR_LOCKED_SHIFT)
++
++#define PCIE_LINK_CFG_AUX_SEL_SHIFT		(4U)
++#define PCIE_LINK_CFG_AUX_SEL_MASK		((u32)0x1U << PCIE_LINK_CFG_AUX_SEL_SHIFT)
++
++#define PCIE_LINK_CFG_POWER_UP_RST_SHIFT		(6U)
++#define PCIE_LINK_CFG_PERST_SHIFT		(5U)
++#define PCIE_LINK_CFG_PHY_CMN_REG_RST_SHIFT		(4U)
++#define PCIE_LINK_CFG_PHY_CMN_RST_SHIFT		(3U)
++#define PCIE_LINK_CFG_PHY_G_RST_SHIFT		(2U)
++#define PCIE_LINK_CFG_PHY_TRSV_REG_RST_SHIFT		(1U)
++#define PCIE_LINK_CFG_PHY_TRSV_RST_SHIFT		(0U)
++#define PCIE_LINK_CFG_POWER_UP_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_POWER_UP_RST_SHIFT)
++#define PCIE_LINK_CFG_PERST_MASK		((u32)0x1U << PCIE_LINK_CFG_PERST_SHIFT)
++#define PCIE_LINK_CFG_PHY_CMN_REG_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_CMN_REG_RST_SHIFT)
++#define PCIE_LINK_CFG_PHY_CMN_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_CMN_RST_SHIFT)
++#define PCIE_LINK_CFG_PHY_G_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_G_RST_SHIFT)
++#define PCIE_LINK_CFG_PHY_TRSV_REG_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_TRSV_REG_RST_SHIFT)
++#define PCIE_LINK_CFG_PHY_TRSV_RST_MASK		((u32)0x1U << PCIE_LINK_CFG_PHY_TRSV_RST_SHIFT)
++#define PCIE_LINK_CFG_PHY_RESET_MASK		(PCIE_LINK_CFG_PHY_TRSV_RST_MASK | \
++		PCIE_LINK_CFG_PHY_TRSV_REG_RST_MASK | \
++		PCIE_LINK_CFG_PHY_G_RST_MASK | \
++		PCIE_LINK_CFG_PHY_CMN_RST_MASK | \
++		PCIE_LINK_CFG_PHY_CMN_REG_RST_MASK | \
++		PCIE_LINK_CFG_PERST_MASK | \
++		PCIE_LINK_CFG_POWER_UP_RST_MASK)
++
++#define PCIE_PHY_ANA_PLL_CLK_OUT_TO_EXT_IO_SEL_SHIFT		(3U)
++#define PCIE_PHY_ANA_PLL_CLK_OUT_TO_EXT_IO_SEL_MASK		((u32)0x1U << PCIE_PHY_ANA_PLL_CLK_OUT_TO_EXT_IO_SEL_SHIFT)
++
++#define PCIE_PHY_ANA_AUX_RX_TX_SEL_SHIFT		(7U)
++#define PCIE_PHY_ANA_AUX_RX_TX_SEL_MASK		((u32)0x1U << PCIE_PHY_ANA_AUX_RX_TX_SEL_SHIFT)
++
++#define PCIE_AUX_CLK_RATE		(125000000UL)
++#define PCIE_APB_CLK_RATE		(100000000UL)
++#define PCIE_PCS_CLK_RATE		(100000000UL)
++#define PCIE_REF_CLK_RATE		(100000000UL)
++
++struct sec14lpp_pcie_phy {
++	struct device	*dev;
++	void __iomem *phy_base;
++	void __iomem *link_base;
++	struct clk		*fbus_clk;
++	struct clk		*aux_clk;
++	struct clk		*apb_clk;
++	struct clk		*pcs_clk;
++	struct clk		*ref_clk;
++	u32 pms;
++	u32	mode;
++};
++
++static inline u32 sec14lpp_pcie_phy_readl(const void __iomem *base, u32 offset)
++{
++	u32 ret = 0x0U;
++
++	if (base != NULL) {
++		ret = ioread32(base + offset);
++	}
++
++	return ret;
++}
++
++static inline void sec14lpp_pcie_phy_writel(void __iomem *base, u32 offset, u32 val, u32 mask)
++{
++	if (base != NULL) {
++		iowrite32((ioread32(base + offset) & ~mask)|val,
++				base + offset);
++	}
++}
++
++static s32 sec14lpp_pcie_phy_enable_clk(const struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		err = clk_prepare_enable(priv->aux_clk);
++		if (err == 0) {
++			err = clk_prepare_enable(priv->apb_clk);
++		}
++
++		if (err == 0) {
++			err = clk_prepare_enable(priv->pcs_clk);
++		}
++
++		if (err == 0) {
++			err = clk_prepare_enable(priv->ref_clk);
++		}
++
++		if (err == 0) {
++			err = clk_prepare_enable(priv->fbus_clk);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_disable_clk(const struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		clk_disable_unprepare(priv->ref_clk);
++		clk_disable_unprepare(priv->pcs_clk);
++		clk_disable_unprepare(priv->apb_clk);
++		clk_disable_unprepare(priv->aux_clk);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_set_clk(const struct sec14lpp_pcie_phy *priv, u32 mode)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		err = sec14lpp_pcie_phy_enable_clk(priv);
++		if (err == 0) {
++			u32 val, mask;
++
++			if ((mode & 0xF0U) == 0x0U) {
++				val = (0x1U << PCIE_PHY_ANA_PLL_CLK_OUT_TO_EXT_IO_SEL_SHIFT);
++				mask = PCIE_PHY_ANA_PLL_CLK_OUT_TO_EXT_IO_SEL_MASK;
++				sec14lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_CMN_REG062, val, mask);
++
++				val = (0x1U << PCIE_PHY_ANA_AUX_RX_TX_SEL_SHIFT);
++				mask = PCIE_PHY_ANA_AUX_RX_TX_SEL_MASK;
++				sec14lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_CMN_REG064, val, mask);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_pwr_down(const struct sec14lpp_pcie_phy *priv, bool enable)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		mask = PCIE_LINK_CFG_PHY_POWER_OFF_MASK;
++		val = enable ? mask : 0x0U;
++		sec14lpp_pcie_phy_writel(priv->link_base, PCIE_LINK_CFG08, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_set_mode(struct phy *phy, enum phy_mode mode, s32 submode)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		struct sec14lpp_pcie_phy *priv = (struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		if (mode == PHY_MODE_PCIE) {
++			u8 clk_mode;
++
++			if (!__builtin_add_overflow(submode, 0, &clk_mode)) {
++				err = sec14lpp_pcie_phy_set_clk((const struct sec14lpp_pcie_phy *)priv, (u32)clk_mode);
++				if (err == 0) {
++					priv->mode = (u32)clk_mode;
++				}
++			}
++		} else {
++			err = -EINVAL;
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_reset(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_power_on(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = sec14lpp_pcie_phy_pwr_down(priv, false);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_power_off(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = sec14lpp_pcie_phy_pwr_down(priv, true);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_init(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++		u32 val, mask;
++
++		/* wait for PLL lock */
++		mask = PCIE_LINK_CFG_PHY_PLL_LOCKED_MASK;
++		do {
++			val = sec14lpp_pcie_phy_readl(priv->link_base, PCIE_LINK_CFG08) & mask;
++		} while (val == 0U);
++
++		/* wait for CDR lock */
++		mask = PCIE_LINK_CFG_PHY_CDR_LOCKED_MASK;
++		do {
++			val = sec14lpp_pcie_phy_readl(priv->link_base, PCIE_LINK_CFG08) & mask;
++		} while (val == 0U);
++
++		mask = PCIE_LINK_CFG_AUX_SEL_MASK;
++		val = mask;
++		sec14lpp_pcie_phy_writel(priv->link_base, PCIE_LINK_CFG43, val, mask);
++		udelay(100);
++
++		mask = PCIE_LINK_CFG_RCVRY_IDLE_STATE_MASK;
++		do {
++			val = sec14lpp_pcie_phy_readl(priv->link_base, PCIE_LINK_CFG08) & mask;
++		} while (val != 0U);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_exit(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct phy_ops sec14lpp_pcie_phy_ops = {
++	.init		= sec14lpp_pcie_phy_init,
++	.exit		= sec14lpp_pcie_phy_exit,
++	.power_on		= sec14lpp_pcie_phy_power_on,
++	.power_off		= sec14lpp_pcie_phy_power_off,
++	.reset		= sec14lpp_pcie_phy_reset,
++	.set_mode		= sec14lpp_pcie_phy_set_mode,
++	.owner		= THIS_MODULE,
++};
++
++static s32 sec14lpp_pcie_phy_suspend_late(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)dev_get_drvdata(dev);
++
++		err = sec14lpp_pcie_phy_disable_clk(priv);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct dev_pm_ops sec14lpp_pcie_phy_pm_ops = {
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(sec14lpp_pcie_phy_suspend_late,
++		NULL)
++};
++
++
++#ifdef CONFIG_OF
++static const struct of_device_id sec14lpp_pcie_phy_id_table[] = {
++	{
++		.compatible = "samsung,14lpp-pcie-phy",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, sec14lpp_pcie_phy_id_table);
++#endif
++
++static s32 sec14lpp_pcie_phy_of_parse_clk(struct platform_device *pdev, struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		priv->aux_clk = devm_clk_get(&pdev->dev, "pcie_aux");
++		if (IS_ERR(priv->aux_clk)) {
++			err = (s32)PTR_ERR(priv->aux_clk);
++		} else {
++			err = clk_set_rate(priv->aux_clk, PCIE_AUX_CLK_RATE);
++		}
++
++		if (err == 0) {
++			priv->apb_clk = devm_clk_get(&pdev->dev, "pcie_apb");
++			if (IS_ERR(priv->apb_clk)) {
++				err = (s32)PTR_ERR(priv->apb_clk);
++			} else {
++				err = clk_set_rate(priv->apb_clk, PCIE_APB_CLK_RATE);
++			}
++		}
++
++		if (err == 0) {
++			priv->pcs_clk = devm_clk_get(&pdev->dev, "pcie_pcs");
++			if (IS_ERR(priv->pcs_clk)) {
++				err = (s32)PTR_ERR(priv->pcs_clk);
++			} else {
++				err = clk_set_rate(priv->pcs_clk, PCIE_PCS_CLK_RATE);
++			}
++		}
++
++		if (err == 0) {
++			priv->fbus_clk = devm_clk_get(&pdev->dev, "fbus_hsio");
++			if (IS_ERR(priv->fbus_clk)) {
++				err = (s32)PTR_ERR(priv->fbus_clk);
++			}
++		}
++
++		if (err == 0) {
++			priv->ref_clk = devm_clk_get(&pdev->dev, "pcie_ref");
++			if (!IS_ERR(priv->ref_clk)) {
++				err = clk_set_rate(priv->ref_clk, PCIE_REF_CLK_RATE);
++			}
++		}
++
++		if (err == 0) {
++			err = of_property_read_u32(pdev->dev.of_node, "pms",
++					&priv->pms);
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_of_parse_reg(struct platform_device *pdev, struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		struct resource *res;
++
++		res = platform_get_resource_byname(pdev,
++				IORESOURCE_MEM, "phy");
++		if (res != NULL) {
++			priv->phy_base = devm_ioremap(&pdev->dev, res->start,
++					resource_size(res));
++			if (IS_ERR(priv->phy_base)) {
++				err = (s32)PTR_ERR(priv->phy_base);
++			}
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev,
++					IORESOURCE_MEM, "link");
++			if (res != NULL) {
++				priv->link_base = devm_ioremap(&pdev->dev, res->start,
++						resource_size(res));
++				if (IS_ERR(priv->link_base)) {
++					err = (s32)PTR_ERR(priv->link_base);
++				}
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_of_parse_dt(struct platform_device *pdev, struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		err = sec14lpp_pcie_phy_of_parse_reg(pdev, priv);
++		if (err == 0) {
++			err = sec14lpp_pcie_phy_of_parse_clk(pdev, priv);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_register(struct sec14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		struct phy_provider *provider;
++		struct phy *phy;
++
++		phy = devm_phy_create(priv->dev, NULL, &sec14lpp_pcie_phy_ops);
++		if (IS_ERR(phy)) {
++			err = PTR_ERR(phy);
++		}
++
++		if (err == 0) {
++			phy_set_drvdata(phy, priv);
++			provider = devm_of_phy_provider_register(priv->dev,
++					of_phy_simple_xlate);
++			if (IS_ERR(provider)) {
++				err = PTR_ERR(provider);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_probe(struct platform_device *pdev)
++{
++	struct sec14lpp_pcie_phy *priv;
++	s32 err = 0;
++
++	priv = (struct sec14lpp_pcie_phy *)devm_kzalloc(&pdev->dev,
++			sizeof(struct sec14lpp_pcie_phy), GFP_KERNEL);
++	if (priv != NULL) {
++		err = sec14lpp_pcie_phy_of_parse_dt(pdev, priv);
++		if (err == 0) {
++			priv->dev = &pdev->dev;
++			platform_set_drvdata(pdev, priv);
++			err = sec14lpp_pcie_phy_register(priv);
++		}
++
++		if (err == 0) {
++			pm_runtime_enable(priv->dev);
++		}
++	} else {
++		err = -ENOMEM;
++	}
++
++	return err;
++}
++
++static s32 sec14lpp_pcie_phy_remove(struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if (pdev != NULL) {
++		const struct sec14lpp_pcie_phy *priv =
++			(const struct sec14lpp_pcie_phy *)platform_get_drvdata(pdev);
++
++		pm_runtime_disable(priv->dev);
++		err = sec14lpp_pcie_phy_disable_clk(priv);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static struct platform_driver sec14lpp_pcie_phy_driver = {
++	.probe		= sec14lpp_pcie_phy_probe,
++	.remove		= sec14lpp_pcie_phy_remove,
++	.driver		= {
++		.name	= "sec14lpp-pcie-phy",
++		.pm	= &sec14lpp_pcie_phy_pm_ops,
++		.of_match_table = of_match_ptr(sec14lpp_pcie_phy_id_table),
++	},
++};
++module_platform_driver(sec14lpp_pcie_phy_driver);
++
++MODULE_DESCRIPTION("Telechips Dolphin3s PCIe PHY Driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/phy/telechips/phy-ss14lpp-pcie.c b/drivers/phy/telechips/phy-ss14lpp-pcie.c
+new file mode 100644
+index 000000000000..2a0cb64e8422
+--- /dev/null
++++ b/drivers/phy/telechips/phy-ss14lpp-pcie.c
+@@ -0,0 +1,502 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright (C) Telechips Inc.
++ */
++
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/of.h>
++#include <linux/io.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/pm_runtime.h>
++#include <linux/delay.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++
++/*
++ * PCIe controller wrapper clock configuration registers
++ */
++#define PCIE_CLK_CFG00			(0x000U)
++#define PCIE_CLK_CFG04			(0x010U)
++
++/*
++ * PCIe controller wrapper phy configuration registers
++ */
++#define PCIE_PHY_REG08		(0x020U)
++#define PCIE_PHY_REG43		(0x0ACU)
++
++/*
++ * Mask/shift bits in PCIe related registers
++ */
++#define PCIE_PHY_REG_REF_USE_PAD_SHIFT		(3U)
++#define PCIE_PHY_REG_REF_USE_PAD_MASK		((u32)0x1U << PCIE_PHY_REG_REF_USE_PAD_SHIFT)
++
++#define PCIE_PHY_REG_PWR_DOWN_SHIFT		(1U)
++#define PCIE_PHY_REG_PWR_DOWN_MASK		((u32)0x1U << PCIE_PHY_REG_PWR_DOWN_SHIFT)
++
++#define PCIE_CLK_CFG_RESETB_SHIT		(31U)
++#define PCIE_CLK_CFG_LOCK_SHIFT     (23U)
++#define PCIE_CLK_CFG_RESETB_MASK		((u32)0x1U << PCIE_CLK_CFG_RESETB_SHIT)
++#define PCIE_CLK_CFG_LOCK_MASK      ((u32)0x1U << PCIE_CLK_CFG_LOCK_SHIFT)
++
++#define PCIE_CLK_CFG_ERIO_EN_SHIFT		(18U)
++#define PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_SHIFT		(5U)
++#define PCIE_CLK_CFG_ERIO_ISO_ENB_SHIFT		(0U)
++#define PCIE_CLK_CFG_ERIO_EN_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_EN_SHIFT)
++#define PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_SHIFT)
++#define PCIE_CLK_CFG_ERIO_ISO_ENB_MASK		((u32)0x1U << PCIE_CLK_CFG_ERIO_ISO_ENB_SHIFT)
++
++#define PCIE_FBUS_CLK_RATE		(333333333UL)
++#define PCIE_PHY_CLK_RATE		(100000000UL)
++
++struct ss14lpp_pcie_phy {
++	struct device	*dev;
++	void __iomem *phy_base;
++	void __iomem *clk_base;
++	struct clk	*phy_clk;
++	struct clk	*fbus_clk;
++	u32 pms;
++	u32	mode;
++};
++
++static inline u32 ss14lpp_pcie_phy_readl(const void __iomem *base, u32 offset)
++{
++	u32 ret = 0x0U;
++
++	if (base != NULL) {
++		ret = ioread32(base + offset);
++	}
++
++	return ret;
++}
++
++static inline void ss14lpp_pcie_phy_writel(void __iomem *base, u32 offset, u32 val, u32 mask)
++{
++	if (base != NULL) {
++		iowrite32((ioread32(base + offset) & ~mask)|val,
++				base + offset);
++	}
++}
++
++static s32 ss14lpp_pcie_phy_enable_clk(const struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		err = clk_prepare_enable(priv->fbus_clk);
++		if (err == 0) {
++			err = clk_prepare_enable(priv->phy_clk);
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_disable_clk(const struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		clk_disable_unprepare(priv->phy_clk);
++		clk_disable_unprepare(priv->fbus_clk);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_disable_clkout(const struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		val = 0x0U;
++		mask = PCIE_CLK_CFG_RESETB_MASK;
++		ss14lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_set_clk(const struct ss14lpp_pcie_phy *priv, u32 mode)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		/* Use internal reference clock */
++		err = ss14lpp_pcie_phy_enable_clk(priv);
++		if (err == 0) {
++			u32 val, mask;
++
++			mask = PCIE_PHY_REG_REF_USE_PAD_MASK;
++			val = ((mode & 0xF0U) != 0x0U) ? mask : 0x0U;
++			ss14lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG08, val, mask);
++
++			if ((mode & 0xF0U) == 0x0U) {
++				val = 0x0U;
++				mask = PCIE_CLK_CFG_RESETB_MASK;
++				ss14lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++
++				val = priv->pms | PCIE_CLK_CFG_RESETB_MASK;
++				mask = 0xFFFFFFFFU;
++				ss14lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG00, val, mask);
++
++				mask = PCIE_CLK_CFG_LOCK_MASK;
++				do {
++					val = ss14lpp_pcie_phy_readl(priv->clk_base, PCIE_CLK_CFG00) & mask;
++				} while (val != mask);
++
++				mask = PCIE_CLK_CFG_ERIO_EN_MASK |
++					PCIE_CLK_CFG_ERIO_PLL_LOCK_DONE_MASK |
++					PCIE_CLK_CFG_ERIO_ISO_ENB_MASK;
++				val = mask;
++				ss14lpp_pcie_phy_writel(priv->clk_base, PCIE_CLK_CFG04, val, mask);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_pwr_down(const struct ss14lpp_pcie_phy *priv, bool enable)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		u32 val, mask;
++
++		mask = PCIE_PHY_REG_PWR_DOWN_MASK;
++		val = enable ? mask : 0x0U;
++		ss14lpp_pcie_phy_writel(priv->phy_base, PCIE_PHY_REG43, val, mask);
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_set_mode(struct phy *phy, enum phy_mode mode, s32 submode)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		struct ss14lpp_pcie_phy *priv = (struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		if (mode == PHY_MODE_PCIE) {
++			u8 clk_mode;
++
++			if (!__builtin_add_overflow(submode, 0, &clk_mode)) {
++				err = ss14lpp_pcie_phy_set_clk((const struct ss14lpp_pcie_phy *)priv, (u32)clk_mode);
++				if (err == 0) {
++					priv->mode = (u32)clk_mode;
++				}
++			}
++		} else {
++			err = -EINVAL;
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_reset(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_power_on(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = ss14lpp_pcie_phy_pwr_down(priv, false);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_power_off(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		err = ss14lpp_pcie_phy_pwr_down(priv, true);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_init(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_exit(struct phy *phy)
++{
++	s32 err = 0;
++
++	if (phy != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)phy_get_drvdata(phy);
++
++		/* TODO */
++		(void)priv;
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct phy_ops ss14lpp_pcie_phy_ops = {
++	.init		= ss14lpp_pcie_phy_init,
++	.exit		= ss14lpp_pcie_phy_exit,
++	.power_on		= ss14lpp_pcie_phy_power_on,
++	.power_off		= ss14lpp_pcie_phy_power_off,
++	.reset		= ss14lpp_pcie_phy_reset,
++	.set_mode		= ss14lpp_pcie_phy_set_mode,
++	.owner		= THIS_MODULE,
++};
++
++static s32 ss14lpp_pcie_phy_suspend_late(struct device *dev)
++{
++	s32 err = 0;
++
++	if (dev != NULL) {
++		const struct ss14lpp_pcie_phy *priv =
++			(const struct ss14lpp_pcie_phy *)dev_get_drvdata(dev);
++
++		err = ss14lpp_pcie_phy_disable_clk(priv);
++		if (err == 0) {
++			err = ss14lpp_pcie_phy_disable_clkout(priv);
++		}
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static const struct dev_pm_ops ss14lpp_pcie_phy_pm_ops = {
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(ss14lpp_pcie_phy_suspend_late,
++		NULL)
++};
++
++#ifdef CONFIG_OF
++static const struct of_device_id ss14lpp_pcie_phy_id_table[] = {
++	{
++		.compatible = "synopsys,ln14lpp-pcie-phy",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, ss14lpp_pcie_phy_id_table);
++#endif
++
++static s32 ss14lpp_pcie_phy_of_parse_clk(struct platform_device *pdev, struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		priv->fbus_clk = devm_clk_get(&pdev->dev, "pcie_fbus");
++		if (IS_ERR(priv->fbus_clk)) {
++			err = (s32)PTR_ERR(priv->fbus_clk);
++		} else {
++			err = clk_set_rate(priv->fbus_clk, PCIE_FBUS_CLK_RATE);
++		}
++
++		if (err == 0) {
++			priv->phy_clk = devm_clk_get(&pdev->dev, "pcie_phy");
++			if (IS_ERR(priv->phy_clk)) {
++				err = (s32)PTR_ERR(priv->phy_clk);
++			} else {
++				err = clk_set_rate(priv->phy_clk, PCIE_PHY_CLK_RATE);
++			}
++		}
++
++		if (err == 0) {
++			err = of_property_read_u32(pdev->dev.of_node, "pms",
++					&priv->pms);
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_of_parse_reg(struct platform_device *pdev, struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		struct resource *res;
++
++		res = platform_get_resource_byname(pdev,
++				IORESOURCE_MEM, "phy");
++		if (res != NULL) {
++			priv->phy_base = devm_ioremap(&pdev->dev, res->start,
++					resource_size(res));
++			if (IS_ERR(priv->phy_base)) {
++				err = (s32)PTR_ERR(priv->phy_base);
++			}
++		}
++
++		if (err == 0) {
++			res = platform_get_resource_byname(pdev,
++					IORESOURCE_MEM, "clk");
++			if (res != NULL) {
++				priv->clk_base = devm_ioremap(&pdev->dev, res->start,
++						resource_size(res));
++				if (IS_ERR(priv->clk_base)) {
++					err = (s32)PTR_ERR(priv->clk_base);
++				}
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_of_parse_dt(struct platform_device *pdev, struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if ((pdev != NULL) && (priv != NULL)) {
++		err = ss14lpp_pcie_phy_of_parse_reg(pdev, priv);
++		if (err == 0) {
++			err = ss14lpp_pcie_phy_of_parse_clk(pdev, priv);
++		}
++	} else {
++		err = -EINVAL;
++	}
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_register(struct ss14lpp_pcie_phy *priv)
++{
++	s32 err = 0;
++
++	if (priv != NULL) {
++		struct phy_provider *provider;
++		struct phy *phy;
++
++		phy = devm_phy_create(priv->dev, NULL, &ss14lpp_pcie_phy_ops);
++		if (IS_ERR(phy)) {
++			err = PTR_ERR(phy);
++		}
++
++		if (err == 0) {
++			phy_set_drvdata(phy, priv);
++			provider = devm_of_phy_provider_register(priv->dev,
++					of_phy_simple_xlate);
++			if (IS_ERR(provider)) {
++				err = PTR_ERR(provider);
++			}
++		}
++	} else {
++		err = -EINVAL;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_probe(struct platform_device *pdev)
++{
++	struct ss14lpp_pcie_phy *priv;
++	s32 err = 0;
++
++	priv = (struct ss14lpp_pcie_phy *)devm_kzalloc(&pdev->dev,
++			sizeof(struct ss14lpp_pcie_phy), GFP_KERNEL);
++	if (priv != NULL) {
++		err = ss14lpp_pcie_phy_of_parse_dt(pdev, priv);
++		if (err == 0) {
++			priv->dev = &pdev->dev;
++			platform_set_drvdata(pdev, priv);
++			err = ss14lpp_pcie_phy_register(priv);
++		}
++
++		if (err == 0) {
++			pm_runtime_enable(priv->dev);
++		}
++	} else {
++		err = -ENOMEM;
++	}
++
++	return err;
++}
++
++static s32 ss14lpp_pcie_phy_remove(struct platform_device *pdev)
++{
++	s32 err = 0;
++
++	if (pdev != NULL) {
++		const struct ss14lpp_pcie_phy *priv = (const struct ss14lpp_pcie_phy *)platform_get_drvdata(pdev);
++
++		pm_runtime_disable(priv->dev);
++		err = ss14lpp_pcie_phy_disable_clk(priv);
++	} else {
++		err = -ENODEV;
++	}
++
++	return err;
++}
++
++static struct platform_driver ss14lpp_pcie_phy_driver = {
++	.probe		= ss14lpp_pcie_phy_probe,
++	.remove		= ss14lpp_pcie_phy_remove,
++	.driver		= {
++		.name	= "ss14lpp-pcie-phy",
++		.pm	= &ss14lpp_pcie_phy_pm_ops,
++		.of_match_table = of_match_ptr(ss14lpp_pcie_phy_id_table),
++	},
++};
++module_platform_driver(ss14lpp_pcie_phy_driver);
++
++MODULE_DESCRIPTION("Telechips Dolphin3 PCIe PHY Driver");
++MODULE_LICENSE("GPL v2");
+-- 
+2.25.1
+

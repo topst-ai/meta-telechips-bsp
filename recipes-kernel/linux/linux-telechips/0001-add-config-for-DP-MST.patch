@@ -1,0 +1,38 @@
+From f81258f448b6fc0fa0aad9cdb1e21f9e1377336e Mon Sep 17 00:00:00 2001
+From: jbhyun <jbhyun@huconn.com>
+Date: Thu, 2 Nov 2023 17:22:20 +0900
+Subject: [PATCH] add config for DP MST
+
+---
+ arch/arm64/boot/dts/tcc/tcc805x-subcore.dtsi | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/tcc/tcc805x-subcore.dtsi b/arch/arm64/boot/dts/tcc/tcc805x-subcore.dtsi
+index 2fc1777c3eb5..516e75d2f3ec 100644
+--- a/arch/arm64/boot/dts/tcc/tcc805x-subcore.dtsi
++++ b/arch/arm64/boot/dts/tcc/tcc805x-subcore.dtsi
+@@ -1402,8 +1402,8 @@
+                 #address-cells = <1>;
+                 #size-cells = <0>;
+                 compatible = "telechips,fb";
+-                //status = "okay";
+-                status = "disabled";
++                status = "okay";
++                //status = "disabled";
+                 memory-region = <&pmap_fb_video>;
+                 xres = <1920>;
+                 yres = <720>;
+@@ -1427,8 +1427,8 @@
+ 
+         fb1: fb@1 { //SVM
+                 compatible = "telechips,fb";
+-                //status = "disabled";
+-                status = "okay";
++                status = "disabled";
++                //status = "okay";
+                 memory-region = <&pmap_fb1_video>;
+                 xres = <1920>;
+                 yres = <1080>;
+-- 
+2.25.1
+

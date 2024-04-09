@@ -1,0 +1,81 @@
+#!/bin/sh
+
+MOUNT="/bin/mount"
+UMOUNT="/bin/umount"
+MOUNT_OPTIONS=""
+MKDIR="/bin/mkdir"
+GREP="/bin/grep"
+SWITCH_ROOT="/sbin/switch_root"
+
+echo "Mounting devtmpfs"
+$MOUNT -t devtmpfs devtmpfs /dev
+
+echo "Mounting procfs"
+$MOUNT -t proc proc /proc
+
+echo "Mounting sysfs"
+$MOUNT -t sysfs sysfs /sys
+
+$GREP -q 'bootchart' /proc/cmdline 2>/dev/null
+if [ "$?" = "0" ]; then
+	BOOT_CHART="1"
+else
+	BOOT_CHART="0"
+fi
+
+
+CMDLINE=`cat /proc/cmdline`
+TO_SWITCH_ROOT="0"
+SYSTEM_PARTITION="/dev/mmcblk0p4"
+
+$MKDIR -p /switch_root
+
+for x in $CMDLINE; do
+	case "$x" in
+		partition.system=*)
+			 SYSTEM_PARTITION="${x#partition.system=}"
+			 ;;
+	esac
+done
+
+if [ -n "$SYSTEM_PARTITION" ]; then
+	timeout=1000
+	while
+		$GREP -q ${SYSTEM_PARTITION#/dev/} /proc/partitions 2>/dev/null
+		[ "$?" = 1 ]
+	do
+		echo "wait for emmc ready"
+		usleep 10000
+		timeout=$(($timeout - 1))
+		if [ $timeout = 0 ];then
+			break
+		fi
+	done
+
+	$MOUNT $MOUNT_OPTIONS $SYSTEM_PARTITION /switch_root
+	if [ "$?" = "0" ]; then
+		TO_SWITCH_ROOT="1"
+	fi
+
+	if [ $TO_SWITCH_ROOT = "0" ]; then
+		echo "CRITICAL: mount ${SYSTEM_PARTITION} was failed" > /dev/kmsg
+		echo "          booting process has stopped. Returning to initramfs shell" > /dev/kmsg
+		/bin/sh
+	fi
+else
+	echo "======== set rootfs partition failed ======" > /dev/kmsg
+	/bin/sh
+fi
+
+if [ $TO_SWITCH_ROOT = "1" ]; then
+	$MOUNT --move /sys /switch_root/sys
+	$MOUNT --move /proc /switch_root/proc
+	$MOUNT --move /dev /switch_root/dev
+	if [ $BOOT_CHART = "1" ]; then
+		echo "======== bootchartd ======" > /dev/kmsg
+		exec $SWITCH_ROOT /switch_root /sbin/bootchartd
+	else
+		echo "======== switch root ======" > /dev/kmsg
+		exec $SWITCH_ROOT /switch_root /sbin/init
+	fi
+fi

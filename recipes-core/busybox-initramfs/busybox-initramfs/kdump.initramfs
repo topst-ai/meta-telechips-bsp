@@ -1,0 +1,78 @@
+#!/bin/sh
+
+PREREQ=""
+prereqs()
+{
+	echo "$PREREQ"
+}
+case $1 in
+# get pre-requisites
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+KVER="`uname -r`"
+CRASHFILE="/var/crash/vmcore"
+MAKEDUMPFILE="/usr/bin/makedumpfile"
+LOG="$rootmnt/var/crash/vmcore.log"
+VMCORE="/proc/vmcore"
+
+# Check that this is a kexec kernel.
+grep -q kdump_needed /proc/cmdline || exit 0
+
+# Do NOT exit the script after this point, or the system will start
+# booting inside the crash kernel.
+
+. ./scripts/functions
+
+# Unconditionally mount /dev in the target, in case it's needed.
+mount -n --bind /dev ${rootmnt}/dev
+
+# Check if any additional filesystems need to be mounted in order to run
+# makedumpfile
+# We assume that the system rootfs is now mounted on ${rootmnt}
+for target in /usr /boot /var
+do
+	# We write to /var; everything else should be mounted ro
+	if [ "$target" = /var ]; then
+		opts=
+	else
+		opts=-oro
+	fi
+	if [ -n "$(awk '$2 == "'$target'" { print $2 }' ${rootmnt}/etc/fstab)" ]
+	then
+		chroot ${rootmnt} mount -n $opts $target
+		mounted="$target $mounted"
+	fi
+done
+
+# Make sure makedumpfile assumptions are satisfied.
+while ! test -x "$rootmnt/$MAKEDUMPFILE"; do
+	panic "kdump: Missing $rootmnt/$MAKEDUMPFILE"
+done
+
+log_begin_msg "Saving vmcore from kernel crash"
+
+mount $rootmnt -o remount,rw
+
+mount -n --bind /proc $rootmnt/proc
+
+# Delete it if the copy fails, mainly to keep from filling up filesystems
+# by accident.
+#
+chroot $rootmnt $MAKEDUMPFILE -E -d 31 $VMCORE $CRASHFILE > $LOG 2>&1 || \
+	rm -f $rootmnt/$CRASHFILE
+
+chmod 400 $rootmnt/$CRASHFILE
+
+# Unmount any extra filesystems we had to mount
+for target in $mounted; do
+	umount -n ${rootmnt}$target
+done
+
+mount $rootmnt -o remount,ro
+reboot
+
+log_end_msg

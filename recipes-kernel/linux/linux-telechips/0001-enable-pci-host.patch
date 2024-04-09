@@ -1,0 +1,45 @@
+From bf7d0915cec5e7968660cc5651fd0e6cbc9e3717 Mon Sep 17 00:00:00 2001
+From: Myunghwan Kim <mh.kim@telechips.com>
+Date: Mon, 1 Apr 2024 11:49:20 +0900
+Subject: [PATCH] enable pci-host
+
+---
+ arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi b/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
+index b71a8799c..3cedfd025 100755
+--- a/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
++++ b/arch/arm64/boot/dts/tcc/tcc8050-linux-ivi.dtsi
+@@ -43,6 +43,7 @@
+ 		pinctrl-1 = <&pcie_rst_idle>;
+ 		pinctrl-2 = <&pcie_rst_idle>;
+ 		refclk_type = <0>;
++		status = "okay";
+ 	};
+ 
+ 	pcie_epc@11000000 {
+@@ -51,7 +52,6 @@
+ 		pinctrl-1 = <&pcie_rst_idle>;
+ 		pinctrl-2 = <&pcie_rst_idle>;
+ 		refclk_type = <0>;
+-		status = "okay";
+ 	};
+ 
+ 	auth-cp {
+@@ -678,10 +678,10 @@
+ 	pinctrl-0 = <&m0dai4_bclk &m0dai4_lrck
+ 				&m0dai4_dao0 &m0dai4_dai0>;
+ 	pinctrl-1 = <&m0dai4_bclk_idle &m0dai4_lrck_idle
+-				&m0dai4_dao0_idle &m0dai4_dai0_idle>;	
++				&m0dai4_dao0_idle &m0dai4_dai0_idle>;
+ 	status = "okay";
+ };
+-	 
++
+ &spdif3 { //SPDIF TX
+ 	pinctrl-names = "default", "idle";
+ 	pinctrl-0 = <&spdif3_tx>;
+-- 
+2.34.1
+
